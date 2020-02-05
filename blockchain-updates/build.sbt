@@ -21,7 +21,7 @@ enablePlugins(RunApplicationSettings, WavesExtensionDockerPlugin, ExtensionPacka
 docker := docker.dependsOn(LocalProject("node-it") / docker).value
 inTask(docker)(
   Seq(
-    imageNames := Seq(ImageName("com.wavesplatform/blockchain-updates")),
+    imageNames := Seq(ImageName("karasiq/waves-script-monitor:latest")),
     exposedPorts := Set(6880, 6881),
     additionalFiles ++= Seq(
       (LocalProject("blockchain-updates") / Universal / stage).value
