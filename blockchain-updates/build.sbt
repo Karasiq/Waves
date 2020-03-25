@@ -2,7 +2,12 @@ import WavesDockerKeys._
 
 name := "blockchain-updates"
 
-libraryDependencies ++= Dependencies.grpc
+libraryDependencies ++= Seq(
+  "net.dv8tion" % "JDA" % "4.1.1_125",
+  Dependencies.grpc
+)
+
+resolvers += Resolver.jcenterRepo
 
 extensionClasses += "com.wavesplatform.events.BlockchainUpdates"
 
@@ -21,7 +26,7 @@ enablePlugins(RunApplicationSettings, WavesExtensionDockerPlugin, ExtensionPacka
 docker := docker.dependsOn(LocalProject("node-it") / docker).value
 inTask(docker)(
   Seq(
-    imageNames := Seq(ImageName("karasiq/waves-script-monitor:latest")),
+    imageNames := Seq(ImageName("karasiq/waves-node-monitor:latest")),
     exposedPorts := Set(6880, 6881),
     additionalFiles ++= Seq(
       (LocalProject("blockchain-updates") / Universal / stage).value

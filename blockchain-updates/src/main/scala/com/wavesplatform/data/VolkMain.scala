@@ -1,133 +1,154 @@
 package com.wavesplatform.data
 
-import java.time.{LocalDate, ZoneId}
+import java.time._
 
+import com.google.protobuf.ByteString
+import com.wavesplatform.account.{Address, AddressScheme}
 import com.wavesplatform.common.state.ByteStr
-import com.wavesplatform.events.protobuf.BlockchainUpdated
-import com.wavesplatform.events.protobuf.BlockchainUpdated.Append.Body
-import com.wavesplatform.lang.script.Script
-import com.wavesplatform.lang.v1.estimator.v3.ScriptEstimatorV3
-import com.wavesplatform.protobuf.transaction.PBTransactions
-import com.wavesplatform.protobuf.transaction.Transaction.Data
-import com.wavesplatform.transaction.smart.SetScriptTransaction
+import com.wavesplatform.events.protobuf.{BlockchainUpdated, StateUpdate}
+import com.wavesplatform.protobuf.block.PBBlocks
+import com.wavesplatform.protobuf.transaction.{PBSignedTransaction, PBTransactions, VanillaTransaction}
+import com.wavesplatform.transaction.Asset.Waves
+import com.wavesplatform.transaction.lease.{LeaseCancelTransaction, LeaseTransaction}
+import com.wavesplatform.transaction.transfer.TransferTransaction
+import com.wavesplatform.transaction.{AuthorizedTransaction, Transaction}
 import com.wavesplatform.utils.ScorexLogging
-import okhttp3.{MediaType, OkHttpClient, Request, RequestBody}
-import play.api.libs.json.Json
 
+import scala.util.Try
 import scala.util.control.NonFatal
 
 object VolkMain extends App with ScorexLogging {
-  def sendNotification(channel: String, height: Int, txId: ByteStr, typeStr: String, text: String): Unit = {
-    val httpClient = new OkHttpClient.Builder().build()
+  def parseTransaction(tx: PBSignedTransaction): Option[VanillaTransaction] = Try(PBTransactions.vanillaUnsafe(tx)).toOption
+
+  def sendNotification(channel: String, height: Int, txId: ByteStr, typeStr: String, alarm: Boolean): Unit = {
     val msg =
-      s"""New script discovered!
-        |Type: $typeStr
-        |Height: *$height*
-        |Transaction: https://wavesexplorer.com/tx/$txId""".stripMargin
-
-    val json = Json.obj(
-      "text"        -> msg,
-      "attachments" -> Json.arr(Json.obj("text" -> text))
-    )
-
-    val request = new Request.Builder()
-      .url(channel)
-      .post(RequestBody.create(MediaType.parse("application/json"), json.toString()))
-      .build()
-
-    val response = httpClient.newCall(request).execute()
-    require(response.isSuccessful, s"Not success: $response")
-    log.info(s"Notified: $response")
+      s"""${if (alarm) "@everyone " else ""}**${typeStr.capitalize}**: https://wavesexplorer.com/tx/$txId""".stripMargin
+    DiscordSender.sendMessage(channel, msg)
   }
 
-  val startHeight = sys.env.get("VOLK_HEIGHT").map(_.toInt)
+  val startHeight = sys.env.get("VOLK_HEIGHT").map(_.toInt).getOrElse(0)
   val channels    = sys.env.get("VOLK_CHANNELS").toSeq.flatMap(_.split(',')).filter(_.nonEmpty)
-  val pa          = new PollingAgent
+  AddressScheme.current = new AddressScheme {
+    override val chainId: Byte = 'W'
+  }
+  val nodeAddress: Address = Address.fromString(sys.env("VOLK_NODE")).right.get
+  val safeAddress: Address = Address.fromString(sys.env("VOLK_SAFE")).right.get
+  val aggr                 = new MicroBlockAggregator
+  val db                   = new BalancesDB(nodeAddress, safeAddress)
+
+  channels.foreach(DiscordSender.sendMessage(_, s"Node monitor started, last checked height is ${db.lastHeight}"))
+  val pa = new PollingAgent(startHeight)
   pa.start(_.foreach {
-    case e @ BlockchainUpdated(_, height, BlockchainUpdated.Update.Append(BlockchainUpdated.Append(_, _, _, body)))
-        if startHeight.forall(_ <= height) =>
-      log.info(s"Event at $height: ${body.getClass.getName}")
+    case BlockchainUpdated(
+        id,
+        height,
+        BlockchainUpdated.Update
+          .Append(BlockchainUpdated.Append(_, Some(stateUpdate), txUpdates, BlockchainUpdated.Append.Body.MicroBlock(microBlock)))
+        ) =>
+      aggr.addMicroBlock(height, id, stateUpdate, txUpdates, microBlock.getMicroBlock.transactions)
 
-      val transactions = body match {
-        case Body.Block(value)      => value.transactions
-        case Body.MicroBlock(value) => value.getMicroBlock.transactions
-        case Body.Empty             => Nil
+    case BlockchainUpdated(
+        id,
+        nextHeight,
+        BlockchainUpdated.Update.Append(BlockchainUpdated.Append(_, stateUpdateOpt, txUpdates, BlockchainUpdated.Append.Body.Block(block)))
+        ) if db.lastHeight < nextHeight =>
+      // if (nextHeight != aggr.height + 1) log.warn(s"Height skip: ${db.lastHeight} -> $nextHeight")
+      val height                  = nextHeight - 1
+      val stateUpdate             = stateUpdateOpt.getOrElse(StateUpdate.defaultInstance)
+      val (updates, transactions) = aggr.finishBlock(nextHeight, id, stateUpdate, txUpdates, block.transactions)
+      val (newLeases, cancelled) = transactions.flatMap(parseTransaction).foldLeft(Set.empty[ByteStr] -> Set.empty[ByteStr]) {
+        case ((leases, cancels), tx) =>
+          tx match {
+            case lt: LeaseTransaction if lt.recipient == nodeAddress          => (leases + lt.id(), cancels)
+            case lc: LeaseCancelTransaction if cancels.contains(lc.id())      => (leases - lc.leaseId, cancels)
+            case lc: LeaseCancelTransaction if db.leases.contains(lc.leaseId) => (leases, cancels + lc.leaseId)
+            case _                                                            => (leases, cancels)
+          }
+      }
+      if (newLeases.nonEmpty || cancelled.nonEmpty) db.addLeases(newLeases, cancelled)
+
+      def simpleNotify(tx: Transaction, typeStr: String): Unit = {
+        log.info(s"Simple alert ($typeStr): $tx")
+        channels.foreach(ch => sendNotification(ch, height, tx.id(), typeStr, alarm = false))
       }
 
-      val byTx = transactions.map { tx =>
-        tx -> (tx.getTransaction.data match {
-          case Data.Issue(value)          => value.script
-          case Data.SetScript(value)      => value.script
-          case Data.SetAssetScript(value) => value.script
-          case _                          => None
-        })
+      def alert(tx: Transaction, typeStr: String): Unit = {
+        log.info(s"Alarm alert ($typeStr): $tx")
+        channels.foreach(ch => sendNotification(ch, height, tx.id(), typeStr, alarm = true))
       }
 
-      byTx.collect {
-        case (tx, Some(script)) =>
-          log.info(s"Script $script")
-          val parsedScript = PBTransactions.toVanillaScript(script)
-          val (text, _)    = Script.decompile(parsedScript)
-          val vtx          = PBTransactions.vanillaUnsafe(tx)
-          val txId         = vtx.id()
-          val isAsset      = vtx.builder.typeId != SetScriptTransaction.typeId
-          val complexity   = Script.estimate(parsedScript, ScriptEstimatorV3).getOrElse(0L)
-          Stats.update(isAsset, complexity.toInt)
-          channels.foreach(sendNotification(_, height, txId, if (isAsset) "Asset" else "Account", text))
+      val watchedAddrs = Set(nodeAddress, safeAddress)
+      if (height > startHeight) transactions.flatMap(parseTransaction) foreach {
+        case transfer: TransferTransaction
+            if transfer.sender.toAddress == nodeAddress && transfer.recipient == safeAddress && transfer.assetId == Waves =>
+          simpleNotify(transfer, s"transfer ${transfer.amount / 100000000}W to safe")
+
+        case lease: LeaseTransaction if lease.recipient == nodeAddress =>
+          simpleNotify(lease, s"lease ${lease.amount / 100000000}W to node")
+
+        case lc: LeaseCancelTransaction if db.leases.contains(lc.leaseId) =>
+          alert(lc, "lease cancel")
+
+        case tx: AuthorizedTransaction if watchedAddrs.contains(tx.sender.toAddress) =>
+          alert(tx, "unknown transaction")
+
+        case _ => // Ignore
       }
 
+      val isNodeGenerated = PBBlocks.vanilla(block.getHeader).generator.toAddress == nodeAddress
+      // log.info(s"New block: $height, generated $isNodeGenerated")
+      val rewards = db.saveBalances(height, updates, transactions.flatMap(parseTransaction))
+      val isToday = {
+        val today = LocalDate.now(ZoneId.of("UTC"))
+        val ts    = LocalDateTime.ofInstant(Instant.ofEpochMilli(block.getHeader.timestamp), ZoneId.of("UTC")).toLocalDate
+        today.compareTo(ts) == 0
+      }
+
+      if (rewards != 0 && isToday) Stats.update(rewards)
       Stats.publish(channels)
 
+    case BlockchainUpdated(_, height, BlockchainUpdated.Update.Rollback(rollback)) if rollback.isBlock =>
+      // log.info(s"Rollback to $height")
+      db.rollback(height)
+      aggr.rollback(height, ByteString.EMPTY)
+
+    case BlockchainUpdated(id, height, BlockchainUpdated.Update.Rollback(rollback)) if rollback.isMicroblock =>
+      // log.info(s"Rollback to ${ByteStr(id.toByteArray)}")
+      aggr.rollback(height, id)
+
     case e =>
-      log.warn(s"Event ignored at ${e.height}: ${e.update.getClass.getName}")
+    // log.warn(s"Event ignored at ${e.height}: ${e.id} ${e.update.getClass.toString}")
   })
 
   object Stats {
-    var lastTime: LocalDate = LocalDate.now()
-    var accounts: Int       = 0
-    var assets: Int         = 0
-    var complexity: Int     = 0
+    val zoneId: ZoneId = ZoneId.of("Europe/Moscow")
+    var lastTime       = LocalDate.now().atTime(18, 0).atZone(zoneId)
+    var balance        = 0L
 
-    def update(isAsset: Boolean, complexity: Int): Unit = {
-      if (isAsset) assets += 1
-      else accounts += 1
-      this.complexity += complexity
+    def update(rewards: Long): Unit = {
+      this.balance += rewards
+      log.info(s"Today rewards is ${balance.toDouble / 100000000} waves")
     }
 
     def publish(channels: Seq[String]): Unit = {
-      val now = LocalDate.now(ZoneId.of("Europe/Moscow"))
-      if (now.compareTo(this.lastTime.plusDays(1L)) >= 0) {
+      val now = ZonedDateTime.now(zoneId)
+      if (now.compareTo(this.lastTime) >= 0) {
         try {
           channels.foreach(sendStats)
-          this.accounts = 0
-          this.assets = 0
-          this.complexity = 0
-          this.lastTime = now
+          this.balance = 0
+          this.lastTime = now.plusDays(1)
+          log.info("Daily stats sent")
         } catch { case NonFatal(e) => log.error("Error sending stats", e) }
       }
     }
 
     def sendStats(channel: String): Unit = {
-      val httpClient = new OkHttpClient.Builder().build()
       val msg =
-        s"""*Daily stats*
-           |Total scripts: ${accounts + assets}
-           |Account scripts: $accounts
-           |Asset scripts: $assets
-           |Total complexity: $complexity""".stripMargin
+        s"""**Daily stats**
+           |Daily profit: ${balance.toDouble / 100000000} waves
+           |Total profit: ${db.totalProfit.toDouble / 100000000} waves""".stripMargin
 
-      val json = Json.obj(
-        "text" -> msg
-      )
-
-      val request = new Request.Builder()
-        .url(channel)
-        .post(RequestBody.create(MediaType.parse("application/json"), json.toString()))
-        .build()
-
-      val response = httpClient.newCall(request).execute()
-      require(response.isSuccessful, s"Not success: $response")
-      log.info(s"Notified: $response")
+      DiscordSender.sendMessage(channel, msg)
     }
   }
 }

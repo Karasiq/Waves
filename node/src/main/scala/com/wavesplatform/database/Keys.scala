@@ -18,6 +18,7 @@ object Keys {
 
   val version: Key[Int]               = intKey(Version, default = 1)
   val height: Key[Int]                = intKey(Height)
+  val volkHeight: Key[Int]            = intKey(VolkHeight)
   def score(height: Int): Key[BigInt] = Key(Score, h(height), Option(_).fold(BigInt(0))(BigInt(_)), _.toByteArray)
 
   def heightOf(blockId: ByteStr): Key[Option[Int]] = Key.opt[Int](HeightOf, blockId.arr, Ints.fromByteArray, Ints.toByteArray)
@@ -178,4 +179,19 @@ object Keys {
 
   def stateHash(height: Int): Key[Option[StateHash]] =
     Key.opt(StateHash, h(height), readStateHash, writeStateHash)
+
+  def volkRewards(height: Int): Key[Option[Long]] =
+    Key.opt(VolkRewards, h(height), Longs.fromByteArray, Longs.toByteArray)
+
+  def volkTotal(): Key[Long] =
+    Key(VolkTotal, Array.emptyByteArray, Longs.fromByteArray, Longs.toByteArray)
+
+  def volkLeases(): Key[Set[ByteStr]] =
+    Key(VolkLeases, Array.emptyByteArray, bytes => bytes.grouped(32).map(ByteStr(_)).toSet, leases => leases.foldLeft(ByteStr.empty)(_ ++ _).arr)
+
+  def volkBalance(address: Address, height: Int): Key[Long] =
+    Key(VolkBalance, address.bytes ++ ByteStr(Ints.toByteArray(height)), Longs.fromByteArray, Longs.toByteArray)
+
+  def volkBalanceHistory(address: Address): Key[Seq[Int]] =
+    historyKey(VolkBalanceHistory, address.bytes)
 }
