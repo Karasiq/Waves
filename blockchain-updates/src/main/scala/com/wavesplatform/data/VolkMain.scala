@@ -33,8 +33,10 @@ object VolkMain extends App with ScorexLogging {
   }
   val nodeAddress: Address = Address.fromString(sys.env("VOLK_NODE")).right.get
   val safeAddress: Address = Address.fromString(sys.env("VOLK_SAFE")).right.get
-  val aggr                 = new MicroBlockAggregator
-  val db                   = new BalancesDB(nodeAddress, safeAddress)
+
+  val aggr      = new MicroBlockAggregator
+  var lastMined = Instant.now()
+  val db        = new BalancesDB(nodeAddress, safeAddress)
 
   channels.foreach(DiscordSender.sendMessage(_, s"Node monitor started, last checked height is ${db.lastHeight}"))
   val pa = new PollingAgent(startHeight)
@@ -44,14 +46,14 @@ object VolkMain extends App with ScorexLogging {
         height,
         BlockchainUpdated.Update
           .Append(BlockchainUpdated.Append(_, Some(stateUpdate), txUpdates, BlockchainUpdated.Append.Body.MicroBlock(microBlock)))
-        ) =>
+        ) if height > startHeight =>
       aggr.addMicroBlock(height, id, stateUpdate, txUpdates, microBlock.getMicroBlock.transactions)
 
     case BlockchainUpdated(
         id,
         nextHeight,
         BlockchainUpdated.Update.Append(BlockchainUpdated.Append(_, stateUpdateOpt, txUpdates, BlockchainUpdated.Append.Body.Block(block)))
-        ) if db.lastHeight < nextHeight =>
+        ) if nextHeight > db.lastHeight && nextHeight > startHeight =>
       // if (nextHeight != aggr.height + 1) log.warn(s"Height skip: ${db.lastHeight} -> $nextHeight")
       val height                  = nextHeight - 1
       val stateUpdate             = stateUpdateOpt.getOrElse(StateUpdate.defaultInstance)
@@ -104,15 +106,23 @@ object VolkMain extends App with ScorexLogging {
         today.compareTo(ts) == 0
       }
 
+      if (isToday) {
+        if (isNodeGenerated) lastMined = Instant.now()
+        else if (lastMined.plus(Duration.ofHours(3)).compareTo(Instant.now()) < 0) {
+          channels.foreach(DiscordSender.sendMessage(_, "**Warning**: Last block generated more than 3 hours ago"))
+          lastMined = Instant.now()
+        }
+      }
+
       if (rewards != 0 && isToday) Stats.update(rewards)
       Stats.publish(channels)
 
-    case BlockchainUpdated(_, height, BlockchainUpdated.Update.Rollback(rollback)) if rollback.isBlock =>
+    case BlockchainUpdated(_, height, BlockchainUpdated.Update.Rollback(rollback)) if rollback.isBlock && height + 2000 > startHeight =>
       // log.info(s"Rollback to $height")
       db.rollback(height)
       aggr.rollback(height, ByteString.EMPTY)
 
-    case BlockchainUpdated(id, height, BlockchainUpdated.Update.Rollback(rollback)) if rollback.isMicroblock =>
+    case BlockchainUpdated(id, height, BlockchainUpdated.Update.Rollback(rollback)) if rollback.isMicroblock && height > startHeight =>
       // log.info(s"Rollback to ${ByteStr(id.toByteArray)}")
       aggr.rollback(height, id)
 
