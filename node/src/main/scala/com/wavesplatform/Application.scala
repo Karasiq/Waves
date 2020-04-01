@@ -23,7 +23,7 @@ import com.wavesplatform.api.http.leasing.LeaseApiRoute
 import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.consensus.PoSSelector
 import com.wavesplatform.consensus.nxt.api.http.NxtConsensusApiRoute
-import com.wavesplatform.database.{DBExt, Keys, openDB}
+import com.wavesplatform.database.{DBExt, Keys, TrackedAssetsDB, openDB}
 import com.wavesplatform.events.{BlockchainUpdateTriggersImpl, BlockchainUpdated, UtxEvent}
 import com.wavesplatform.extensions.{Context, Extension}
 import com.wavesplatform.features.EstimatorProvider._
@@ -35,7 +35,7 @@ import com.wavesplatform.metrics.Metrics
 import com.wavesplatform.mining.{Miner, MinerDebugInfo, MinerImpl}
 import com.wavesplatform.network.RxExtensionLoader.RxExtensionLoaderShutdownHook
 import com.wavesplatform.network._
-import com.wavesplatform.settings.WavesSettings
+import com.wavesplatform.settings.{TrackingAddressAssetsSettings, WavesSettings}
 import com.wavesplatform.state.appender.{BlockAppender, ExtensionAppender, MicroblockAppender}
 import com.wavesplatform.state.{Blockchain, BlockchainUpdaterImpl, Diff, Height}
 import com.wavesplatform.transaction.smart.script.trace.TracedResult
@@ -72,9 +72,13 @@ class Application(val actorSystem: ActorSystem, val settings: WavesSettings, con
 
   private val db = openDB(settings.dbSettings.directory)
 
+  private val trackedAssetsDB = TrackedAssetsDB(db)
+
   private val LocalScoreBroadcastDebounce = 1.second
 
   private val spendableBalanceChanged = ConcurrentSubject.publish[(Address, Asset)]
+
+  private val trackingAddressAssets = ConcurrentSubject.publish[(Address, Asset)]
 
   private lazy val upnp = new UPnP(settings.networkSettings.uPnPSettings) // don't initialize unless enabled
 
@@ -135,7 +139,22 @@ class Application(val actorSystem: ActorSystem, val settings: WavesSettings, con
     val establishedConnections = new ConcurrentHashMap[Channel, PeerInfo]
     val allChannels            = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE)
     val utxStorage =
-      new UtxPoolImpl(time, blockchainUpdater, spendableBalanceChanged, settings.utxSettings, utxEvents.onNext)
+      new UtxPoolImpl(
+        time,
+        blockchainUpdater,
+        spendableBalanceChanged,
+        trackingAddressAssets,
+        settings.utxSettings,
+        utxEvents.onNext,
+        getBadAssetsDiff = (txId, diff) =>
+          TrackingAddressAssetsSettings.trackingDiff(
+            settings.blockchainSettings.functionalitySettings.trackingAddressAssets,
+            txId,
+            diff.portfolios,
+            blockchainUpdater.balance,
+            blockchainUpdater.badAddressAssetAmount
+          )
+      )
     maybeUtx = Some(utxStorage)
 
     val timer                 = new HashedWheelTimer()
@@ -214,6 +233,7 @@ class Application(val actorSystem: ActorSystem, val settings: WavesSettings, con
       override def actorSystem: ActorSystem                                                      = app.actorSystem
       override def utxEvents: Observable[UtxEvent]                                               = app.utxEvents
       override def blockchainUpdated: Observable[BlockchainUpdated]                              = app.blockchainUpdated
+      override def trackingAddressAssets: Observable[(Address, Asset)]                           = app.trackingAddressAssets
 
       override val transactionsApi: CommonTransactionsApi = CommonTransactionsApi(
         blockchainUpdater.bestLiquidDiff.map(diff => Height(blockchainUpdater.height) -> diff),
@@ -224,7 +244,8 @@ class Application(val actorSystem: ActorSystem, val settings: WavesSettings, con
         utxSynchronizer.publish,
         loadBlockAt(db, blockchainUpdater)
       )
-      override val blocksApi: CommonBlocksApi     = CommonBlocksApi(blockchainUpdater, loadBlockMetaAt(db, blockchainUpdater), loadBlockInfoAt(db, blockchainUpdater))
+      override val blocksApi: CommonBlocksApi =
+        CommonBlocksApi(blockchainUpdater, loadBlockMetaAt(db, blockchainUpdater), loadBlockInfoAt(db, blockchainUpdater))
       override val accountsApi: CommonAccountsApi = CommonAccountsApi(blockchainUpdater.bestLiquidDiff.getOrElse(Diff.empty), db, blockchainUpdater)
       override val assetsApi: CommonAssetsApi     = CommonAssetsApi(blockchainUpdater.bestLiquidDiff.getOrElse(Diff.empty), db, blockchainUpdater)
     }
@@ -367,7 +388,8 @@ class Application(val actorSystem: ActorSystem, val settings: WavesSettings, con
           mbSyncCacheSizes,
           scoreStatsReporter,
           configRoot,
-          loadBalanceHistory
+          loadBalanceHistory,
+          trackedAssetsDB
         ),
         AssetsApiRoute(
           settings.restAPISettings,
@@ -409,6 +431,7 @@ class Application(val actorSystem: ActorSystem, val settings: WavesSettings, con
       }
 
       spendableBalanceChanged.onComplete()
+      trackingAddressAssets.onComplete()
       utx.close()
 
       shutdownAndWait(historyRepliesScheduler, "HistoryReplier", 5.minutes.some)
@@ -505,7 +528,9 @@ object Application extends ScorexLogging {
   private[wavesplatform] def loadBlockAt(db: DB, blockchainUpdater: BlockchainUpdaterImpl)(height: Int): Option[(BlockMeta, Seq[Transaction])] =
     loadBlockInfoAt(db, blockchainUpdater)(height).map { case (meta, txs) => (meta, txs.map(_._1)) }
 
-  private[wavesplatform] def loadBlockInfoAt(db: DB, blockchainUpdater: BlockchainUpdaterImpl)(height: Int): Option[(BlockMeta, Seq[(Transaction, Boolean)])] =
+  private[wavesplatform] def loadBlockInfoAt(db: DB, blockchainUpdater: BlockchainUpdaterImpl)(
+      height: Int
+  ): Option[(BlockMeta, Seq[(Transaction, Boolean)])] =
     loadBlockMetaAt(db, blockchainUpdater)(height).map { meta =>
       meta -> blockchainUpdater
         .liquidTransactions(meta.id)

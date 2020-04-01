@@ -6,6 +6,8 @@
    2. You've checked "Make project before run"
  */
 
+import java.nio.file.Paths
+
 import sbt.Keys._
 import sbt._
 import sbtcrossproject.CrossPlugin.autoImport.{CrossType, crossProject}
@@ -148,8 +150,23 @@ packageAll := Def
   .sequential(
     root / clean,
     Def.task {
-      (node / assembly).value
-      (node / Debian / packageBin).value
+      val log = streams.value.log
+      val cacheDir = Paths.get(System.getProperty("user.home"), ".cache", "dex")
+
+      val jar = (node / assembly).value
+      if (jar.name.matches("""waves-all-\d+\.\d+\.\d+(?:\.\d+).jar""")) {
+        val cached = cacheDir.resolve(jar.name).toFile
+        log.info(s"$jar is a release version, copying it to $cached")
+        IO.copyFile(jar, cached)
+      }
+
+      val deb = (node / Debian / packageBin).value
+      if (deb.name.matches("""waves_\d+\.\d+\.\d+(?:\.\d+)?_all.deb""")) {
+        val cached = cacheDir.resolve(deb.name).toFile
+        log.info(s"$deb is a release version, copying it to $cached")
+        IO.copyFile(deb, cached)
+      }
+
       (`grpc-server` / Universal / packageZipTarball).value
       (`grpc-server` / Debian / packageBin).value
     }
@@ -159,7 +176,7 @@ packageAll := Def
 lazy val checkPRRaw = taskKey[Unit]("Build a project and run unit tests")
 checkPRRaw := Def
   .sequential(
-    root / clean,
+    packageAll, // Hack to run clean and package all artifacts before all tasks
     Def.task {
       (`lang-jvm` / Compile / PB.generate).value
       (Test / compile).value

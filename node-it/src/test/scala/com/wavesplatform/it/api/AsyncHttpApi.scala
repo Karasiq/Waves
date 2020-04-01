@@ -13,6 +13,7 @@ import com.wavesplatform.api.http.requests.{IssueRequest, TransferRequest}
 import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.common.utils.{Base58, Base64, EitherExt2}
 import com.wavesplatform.features.api.ActivationStatus
+import com.wavesplatform.http.DebugApiRoute.TrackedAssetsAccount
 import com.wavesplatform.http.DebugMessage._
 import com.wavesplatform.http.{DebugMessage, RollbackParams, `X-Api-Key`}
 import com.wavesplatform.it.Node
@@ -933,6 +934,12 @@ object AsyncHttpApi extends Assertions {
       get(s"/debug/portfolios/$address?considerUnspent=$considerUnspent", withApiKey = true, amountsAsStrings = amountsAsStrings)
         .as[Portfolio](amountsAsStrings)
     }
+
+    def debugTrackedAssets(address: String): Future[Seq[String]] = getWithApiKey(s"/debug/trackedAssets/$address").as[Seq[String]]
+
+    def debugBalanceDetails(address: String, asset: String): Future[DebugBalanceDetails] = getWithApiKey(s"/debug/balanceDetails/$address/$asset").as[DebugBalanceDetails]
+
+    def debugAllTrackedAssetsByAssetId(asset: String): Future[Map[String, TrackedAssetsAccount]] = getWithApiKey(s"/debug/trackedAssets/asset/$asset").as[Map[String, TrackedAssetsAccount]]
 
     def debugMinerInfo(): Future[Seq[State]] = getWithApiKey(s"/debug/minerInfo").as[Seq[State]]
 

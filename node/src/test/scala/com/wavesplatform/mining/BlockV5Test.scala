@@ -16,7 +16,7 @@ import com.wavesplatform.history.chainBaseAndMicro
 import com.wavesplatform.lagonaki.mocks.TestBlock
 import com.wavesplatform.lang.ValidationError
 import com.wavesplatform.protobuf.block.PBBlocks
-import com.wavesplatform.settings.{Constants, FunctionalitySettings, TestFunctionalitySettings, WalletSettings, WavesSettings}
+import com.wavesplatform.settings.{Constants, FunctionalitySettings, TestFunctionalitySettings, TrackingAddressAssetsSettings, WalletSettings, WavesSettings}
 import com.wavesplatform.state.appender.BlockAppender
 import com.wavesplatform.state.{Blockchain, BlockchainUpdaterImpl, NG, diffs}
 import com.wavesplatform.transaction.Asset.Waves
@@ -338,7 +338,7 @@ class BlockV5Test
 
   private def createTx(sender: KeyPair, recipient: AddressOrAlias): Transaction =
     TransferTransaction
-      .selfSigned(TxVersion.V1, sender, recipient, Waves, 10 * Constants.UnitsInWave, Waves, 100000, ByteStr.empty, ntpTime.getTimestamp())
+      .selfSigned(TxVersion.V1, sender, recipient, Waves, 10 * Constants.UnitsInWave, Waves, 100000L, ByteStr.empty, ntpTime.getTimestamp())
       .explicitGet()
 
   private val updaterScenario = for {
@@ -474,7 +474,7 @@ class BlockV5Test
     val pos               = PoSSelector(blockchain, settings.synchronizationSettings)
     val allChannels       = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE)
     val wallet            = Wallet(WalletSettings(None, Some("123"), None))
-    val utxPool           = new UtxPoolImpl(time, blockchain, Observer.stopped, settings.utxSettings)
+    val utxPool           = new UtxPoolImpl(time, blockchain, Observer.stopped, Observer.stopped, settings.utxSettings, getBadAssetsDiff = (_, _) => Map.empty)
     val minerScheduler    = Scheduler.singleThread("miner")
     val appenderScheduler = Scheduler.singleThread("appender")
     val miner             = new MinerImpl(allChannels, blockchain, settings, time, utxPool, wallet, pos, minerScheduler, appenderScheduler)
@@ -502,7 +502,8 @@ object BlockV5Test {
           BlockchainFeatures.BlockReward.id -> BlockRewardActivationHeight,
           BlockchainFeatures.NG.id          -> NGActivationHeight,
           BlockchainFeatures.FairPoS.id     -> FairPoSActivationHeight
-        )
+        ),
+        trackingAddressAssets = TrackingAddressAssetsSettings.empty
       )
     ),
     minerSettings = defaultSettings.minerSettings.copy(quorum = 0)

@@ -12,10 +12,12 @@ import cats.implicits._
 import cats.kernel.Monoid
 import com.typesafe.config.{ConfigObject, ConfigRenderOptions}
 import com.wavesplatform.account.Address
+import com.wavesplatform.api.http.ApiError.{CustomValidationError, InvalidAddress}
 import com.wavesplatform.api.common.{CommonAccountsApi, CommonAssetsApi, CommonTransactionsApi}
 import com.wavesplatform.api.http.TransactionsApiRoute.applicationStatus
 import com.wavesplatform.api.http._
 import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.database.TrackedAssetsDB
 import com.wavesplatform.features.BlockchainFeatures
 import com.wavesplatform.lang.ValidationError
 import com.wavesplatform.mining.{Miner, MinerDebugInfo}
@@ -25,6 +27,7 @@ import com.wavesplatform.state.diffs.TransactionDiffer
 import com.wavesplatform.state.{Blockchain, LeaseBalance, NG, Portfolio}
 import com.wavesplatform.transaction.TxValidationError.{GenericError, InvalidRequestSignature}
 import com.wavesplatform.transaction._
+import com.wavesplatform.transaction.assets.exchange.AssetPair
 import com.wavesplatform.transaction.smart.script.trace.TracedResult
 import com.wavesplatform.utils.{ScorexLogging, Time}
 import com.wavesplatform.utx.UtxPool
@@ -32,7 +35,7 @@ import com.wavesplatform.wallet.Wallet
 import io.netty.channel.Channel
 import monix.eval.{Coeval, Task}
 import monix.execution.Scheduler
-import play.api.libs.json.Json.JsValueWrapper
+import play.api.libs.json.Json.{JsValueWrapper, toJsFieldJsValueWrapper}
 import play.api.libs.json._
 
 import scala.concurrent.duration._
@@ -58,7 +61,8 @@ case class DebugApiRoute(
     mbsCacheSizesReporter: Coeval[MicroBlockSynchronizer.CacheSizes],
     scoreReporter: Coeval[RxScoreObserver.Stats],
     configRoot: ConfigObject,
-    loadBalanceHistory: Address => Seq[(Int, Long)]
+    loadBalanceHistory: Address => Seq[(Int, Long)],
+    trackedAssetsDB: TrackedAssetsDB = TrackedAssetsDB.empty
 ) extends ApiRoute
     with AuthRoute
     with ScorexLogging {
@@ -72,7 +76,7 @@ case class DebugApiRoute(
   override val settings: RestAPISettings = ws.restAPISettings
   override lazy val route: Route = pathPrefix("debug") {
     stateChanges ~ balanceHistory ~ validate ~ withAuth {
-      state ~ info ~ stateWaves ~ rollback ~ rollbackTo ~ blacklist ~ portfolios ~ minerInfo ~ configInfo ~ print
+      state ~ info ~ stateWaves ~ rollback ~ rollbackTo ~ blacklist ~ portfolios ~ allTrackedAssetsByAssetId ~ trackedAssets ~ balanceDetails ~ minerInfo ~ configInfo ~ print
     }
   }
 
@@ -114,6 +118,61 @@ case class DebugApiRoute(
               Json.obj(l.map { case (address, balance) => address.toString -> (balance: JsValueWrapper) }: _*)
           }
       )
+    }
+  }
+
+  def allTrackedAssetsByAssetId: Route = path("trackedAssets" / "asset" / Segment) { rawAssetId =>
+    (get & withAuth) {
+      AssetPair.extractAssetId(rawAssetId) match {
+        case Failure(_) => complete(CustomValidationError(s"Can not parse an asset id: $rawAssetId"))
+        case Success(asset) =>
+          val items = trackedAssetsDB.allTrackedAssetsByAssetId(asset).toSeq.map {
+            case (address, bad) =>
+              address.toString -> {
+                Json.toJson(
+                  TrackedAssetsAccount(
+                    bad,
+                    blockchain.balance(address, asset) - bad
+                  )
+                ): JsValueWrapper
+              }
+          }
+          complete(Json.obj(items: _*))
+      }
+    }
+  }
+
+  def trackedAssets: Route = path("trackedAssets" / Segment) { rawAddress =>
+    (get & withAuth) {
+      Address.fromString(rawAddress) match {
+        case Left(_) => complete(InvalidAddress)
+        case Right(address) =>
+          val blacklistedOnBlockchain = blockchain.trackedAssets(address).filter { asset =>
+            blockchain.badAddressAssetAmount(address, asset) > 0
+          }
+          val blacklistedOnUtx = utxStorage.badAddressAssets(address).keySet
+          complete(Json.toJson(blacklistedOnBlockchain ++ blacklistedOnUtx))
+      }
+    }
+  }
+
+  def balanceDetails: Route = path("balanceDetails" / Segment / Segment) { (rawAddress, rawAsset) =>
+    (get & withAuth) {
+      val args = for {
+        address <- Address.fromString(rawAddress).leftMap(_ => InvalidAddress)
+        asset   <- AssetPair.extractAssetId(rawAsset).toEither.leftMap(e => CustomValidationError(s"Can't parse asset: $rawAsset: ${e.getMessage}"))
+      } yield (address, asset)
+
+      args match {
+        case Left(e) => complete(e)
+        case Right((address, asset)) =>
+          val goodInBlockchain = blockchain.balance(address, asset)
+          val badInBlockchain  = blockchain.badAddressAssetAmount(address, asset)
+          val badInUtx         = utxStorage.badAddressAssets(address).getOrElse(asset, 0L)
+          val bad              = badInBlockchain + badInUtx
+          val good             = goodInBlockchain - bad
+          complete(Json.toJson(TrackedAssetsAccount(bad, good)))
+      }
     }
   }
 
@@ -320,4 +379,7 @@ object DebugApiRoute {
       case Disabled          => "disabled"
       case Error(err)        => s"error: $err"
     })
+
+  case class TrackedAssetsAccount(bad: Long, good: Long)
+  implicit val trackedAssetsAccountFormat: Format[TrackedAssetsAccount] = Json.format[TrackedAssetsAccount]
 }

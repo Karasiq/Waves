@@ -27,7 +27,14 @@ class MicroBlockMinerSpec extends FlatSpec with Matchers with PathMockFactory wi
     val settings  = domainSettingsWithFS(TestFunctionalitySettings.withFeatures(BlockchainFeatures.NG))
     withDomain(settings) { d =>
       d.appendBlock(TestBlock.create(Seq(genesis)))
-      val utxPool = new UtxPoolImpl(ntpTime, d.blockchainUpdater, ignoreSpendableBalanceChanged, settings.utxSettings)
+      val utxPool = new UtxPoolImpl(
+        ntpTime,
+        d.blockchainUpdater,
+        ignoreSpendableBalanceChanged,
+        ignoreSpendableBalanceChanged,
+        settings.utxSettings,
+        getBadAssetsDiff = (_, _) => Map.empty
+      )
       val microBlockMiner = new MicroBlockMinerImpl(
         _ => (),
         null,
@@ -59,7 +66,7 @@ class MicroBlockMinerSpec extends FlatSpec with Matchers with PathMockFactory wi
         result match {
           case res @ MicroBlockMinerImpl.Success(b, totalConstraint) =>
             val isFirstBlock = block.transactionData.isEmpty
-            val elapsed = (res.nanoTime - startTime).nanos.toMillis
+            val elapsed      = (res.nanoTime - startTime).nanos.toMillis
 
             if (isFirstBlock) elapsed should be < 1000L
             else elapsed shouldBe settings.minerSettings.microBlockInterval.toMillis +- 1000
@@ -89,8 +96,8 @@ class MicroBlockMinerSpec extends FlatSpec with Matchers with PathMockFactory wi
       d.appendBlock(baseBlock)
 
       val constraint = OneDimensionalMiningConstraint(5, TxEstimators.one, "limit")
-      val lastBlock = generateBlocks(baseBlock, constraint, 0)
+      val lastBlock  = generateBlocks(baseBlock, constraint, 0)
       lastBlock.transactionData should have size constraint.rest.toInt
     }
-    }
+  }
 }

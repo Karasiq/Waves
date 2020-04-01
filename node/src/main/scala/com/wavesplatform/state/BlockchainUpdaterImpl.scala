@@ -653,6 +653,14 @@ class BlockchainUpdaterImpl(
     compositeBlockchain.balance(address, mayBeAssetId)
   }
 
+  override def trackedAssets(address: Address): Set[Asset] = readLock {
+    compositeBlockchain.trackedAssets(address)
+  }
+
+  override def badAddressAssetAmount(address: Address, assetId: Asset): Long = readLock {
+    compositeBlockchain.badAddressAssetAmount(address, assetId)
+  }
+
   override def leaseBalance(address: Address): LeaseBalance = readLock {
     compositeBlockchain.leaseBalance(address)
   }

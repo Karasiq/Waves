@@ -1,6 +1,6 @@
 package com.wavesplatform
 
-import java.io.File
+import java.io.{ByteArrayOutputStream, File}
 import java.nio.ByteBuffer
 import java.util.{Map => JMap}
 
@@ -22,9 +22,9 @@ import com.wavesplatform.lang.script.{Script, ScriptReader}
 import com.wavesplatform.protobuf.block.PBBlocks
 import com.wavesplatform.protobuf.transaction.PBTransactions
 import com.wavesplatform.state._
-import com.wavesplatform.transaction.Asset.IssuedAsset
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction.lease.LeaseTransaction
-import com.wavesplatform.transaction.{GenesisTransaction, LegacyPBSwitch, PaymentTransaction, Transaction, TransactionParsers, TxValidationError}
+import com.wavesplatform.transaction.{Asset, GenesisTransaction, LegacyPBSwitch, PaymentTransaction, Transaction, TransactionParsers, TxValidationError}
 import com.wavesplatform.utils.{ScorexLogging, _}
 import monix.eval.Task
 import monix.reactive.Observable
@@ -120,6 +120,39 @@ package object database extends ScorexLogging {
 
   def writeAssetIds(values: Seq[ByteStr]): Array[Byte] =
     values.foldLeft(ByteBuffer.allocate(values.length * transaction.AssetIdLength)) { case (buf, ai) => buf.put(ai.arr) }.array()
+
+  def readAsset(from: ByteBuffer): Asset =
+    from.get() match {
+      case 0 => Waves
+      case 1 =>
+        val buffer = new Array[Byte](32) // Cames from txid: FastHashId: crypto.fastHash: Blake2b256.hash: Digest32
+        from.get(buffer)
+        IssuedAsset(ByteStr(buffer))
+    }
+
+  def writeAsset(asset: Asset): Array[Byte] = asset match {
+    case Waves           => Array[Byte](0)
+    case IssuedAsset(id) => 1.toByte +: id.arr
+  }
+
+  def readAssets(data: Array[Byte]): Set[Asset] =
+    if (data == null) Set.empty
+    else {
+      val bb     = ByteBuffer.wrap(data)
+      val length = bb.getInt
+      val r      = Set.newBuilder[Asset]
+      (1 to length).foreach { _ =>
+        r += readAsset(bb)
+      }
+      r.result()
+    }
+
+  def writeAssets(data: Set[Asset]): Array[Byte] = {
+    val r = new ByteArrayOutputStream()
+    r.write(Ints.toByteArray(data.size))
+    data.foreach(asset => r.write(writeAsset(asset)))
+    r.toByteArray
+  }
 
   def readTxIds(data: Array[Byte]): List[ByteStr] = Option(data).fold(List.empty[ByteStr]) { d =>
     val b   = ByteBuffer.wrap(d)

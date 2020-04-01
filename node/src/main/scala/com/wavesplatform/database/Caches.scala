@@ -15,14 +15,14 @@ import com.wavesplatform.state.DiffToStateApplier.PortfolioUpdates
 import com.wavesplatform.state._
 import com.wavesplatform.transaction.Asset.IssuedAsset
 import com.wavesplatform.transaction.{Asset, Transaction}
-import com.wavesplatform.utils.ObservedLoadingCache
+import com.wavesplatform.utils.{ObservedLoadingCache, ScorexLogging}
 import monix.reactive.Observer
 
-import scala.jdk.CollectionConverters._
 import scala.concurrent.duration._
+import scala.jdk.CollectionConverters._
 import scala.reflect.ClassTag
 
-abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) extends Blockchain with Storage {
+abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) extends Blockchain with Storage with ScorexLogging {
   import Caches._
 
   val dbSettings: DBSettings
@@ -92,6 +92,11 @@ abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) exten
   protected def discardBalance(key: (Address, Asset)): Unit         = balancesCache.invalidate(key)
   override def balance(address: Address, mayBeAssetId: Asset): Long = balancesCache.get(address -> mayBeAssetId)
   protected def loadBalance(req: (Address, Asset)): Long
+
+  private val badAssetsOfAddressCache: LoadingCache[(Address, Asset), java.lang.Long] = cache(dbSettings.maxCacheSize * 16, loadBadAssets)
+  protected def discardTrackedAddressAssets(key: (Address, Asset)): Unit              = badAssetsOfAddressCache.invalidate(key)
+  override def badAddressAssetAmount(address: Address, assetId: Asset): Long          = badAssetsOfAddressCache.get(address -> assetId)
+  protected def loadBadAssets(req: (Address, Asset)): Long
 
   private val assetDescriptionCache: LoadingCache[IssuedAsset, Option[AssetDescription]] = cache(dbSettings.maxCacheSize, loadAssetDescription)
   protected def loadAssetDescription(asset: IssuedAsset): Option[AssetDescription]
@@ -170,7 +175,8 @@ abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) exten
       reward: Option[Long],
       hitSource: ByteStr,
       scriptResults: Map[ByteStr, InvokeScriptResult],
-      failedTransactionIds: Set[ByteStr]
+      failedTransactionIds: Set[ByteStr],
+      badAssetsOfAddress: Map[AddressId, Map[Asset, Long]]
   ): Unit
 
   override def append(diff: Diff, carryFee: Long, totalFee: Long, reward: Option[Long], hitSource: ByteStr, block: Block): Unit = {
@@ -193,6 +199,26 @@ abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) exten
     val PortfolioUpdates(updatedBalances, updatedLeaseBalances) = DiffToStateApplier.portfolios(this, diff)
 
     val leaseBalances = updatedLeaseBalances.map { case (address, lb) => addressIdWithFallback(address, newAddressIds) -> lb }
+
+    val newBadAssetsOfAddress          = Map.newBuilder[AddressId, Map[Asset, Long]]
+    val badAssetsOfAddressCacheUpdates = Map.newBuilder[(Address, Asset), java.lang.Long]
+    for {
+      (address, badAssets) <- diff.badAssetsOfAddress
+      if badAssets.nonEmpty
+    } newAddressIds.get(address).orElse(addressId(address)) match {
+      case None => log.warn(s"Can't find address id for $address")
+      case Some(aid) =>
+        val updated = badAssets.map {
+          case (asset, balanceDiff) =>
+            val origBalance = badAddressAssetAmount(address, asset)
+            val updated = origBalance + balanceDiff
+            badAssetsOfAddressCacheUpdates += (address, asset) -> updated
+
+            asset -> updated
+        }
+
+        newBadAssetsOfAddress += aid -> updated
+    }
 
     val newFills = for {
       (orderId, fillInfo) <- diff.orderFills
@@ -244,7 +270,8 @@ abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) exten
       reward,
       hitSource,
       diff.scriptResults,
-      failedTransactionIds
+      failedTransactionIds,
+      newBadAssetsOfAddress.result()
     )
 
     val emptyData = Map.empty[(Address, String), Option[DataEntry[_]]]
@@ -277,6 +304,8 @@ abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) exten
     accountDataCache.putAll(newData.asJava)
 
     forgetBlocks()
+
+    badAssetsOfAddressCache.putAll(badAssetsOfAddressCacheUpdates.result().asJava)
   }
 
   protected def doRollback(targetBlockId: ByteStr): Seq[(Block, ByteStr)]

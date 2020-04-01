@@ -2,6 +2,7 @@ package com.wavesplatform.settings
 
 import com.typesafe.config.ConfigFactory
 import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import org.scalatest.{FlatSpec, Matchers}
 
 import scala.concurrent.duration._
@@ -28,6 +29,34 @@ class BlockchainSettingsSpecification extends FlatSpec with Matchers {
         |        max-transaction-time-back-offset = 55s
         |        max-transaction-time-forward-offset = 12d
         |        lease-expiration = 1000000
+        |        tracking-address-assets {
+        |           transfers {
+        |             6avuEsqGcV1ESYUCfQAU2ZSjko5zqDQfniGfL4UK1X6w {
+        |               receivers: [
+        |                 {
+        |                   address: 3MpjqDseB2P9KJekaFZnvUEyWU3XZaBMXUD
+        |                   asset:   2fiCMUZgBZHs7DtwjyTET8gyToNNX1X5r8zUaouqoztQ
+        |                 },
+        |                 {
+        |                   address: 3FD1Wr64awGdkg2kTzR4fHtng9sU2wZENQc
+        |                   asset:   WAVES
+        |                 }
+        |               ]
+        |             }
+        |             7M4pB9DLfBdmGAyoQL2R5hUga9woJatk5WiHNgU6jEFg {
+        |               receivers: [
+        |                 {
+        |                   address: 3FFhLVuFxy7Aes25wNHydccn4TSPuuZvNoG
+        |                   asset:   WAVES
+        |                 }
+        |               ]
+        |             }
+        |           }
+        |
+        |           whitelisted-txs: [
+        |             3F4RB9DLfBdmGAyaQL2R5hUga9woJatk5WiHNgU6jEFe
+        |           ]
+        |        }
         |      }
         |      rewards {
         |        term = 100000
@@ -65,6 +94,33 @@ class BlockchainSettingsSpecification extends FlatSpec with Matchers {
     settings.rewardsSettings.minIncrement should be(50000000)
     settings.rewardsSettings.term should be(100000)
     settings.rewardsSettings.votingInterval should be(10000)
+    settings.functionalitySettings.trackingAddressAssets.transfers should be(
+      Map(
+        ByteStr.decodeBase58("6avuEsqGcV1ESYUCfQAU2ZSjko5zqDQfniGfL4UK1X6w").get -> TrackingAddressAssetsSettings.ReceiversSettings(
+          Set(
+            TrackingAddressAssetsSettings.ReceiverItemSettings(
+              address = "3MpjqDseB2P9KJekaFZnvUEyWU3XZaBMXUD",
+              asset = IssuedAsset(ByteStr.decodeBase58("2fiCMUZgBZHs7DtwjyTET8gyToNNX1X5r8zUaouqoztQ").get)
+            ),
+            TrackingAddressAssetsSettings.ReceiverItemSettings(
+              address = "3FD1Wr64awGdkg2kTzR4fHtng9sU2wZENQc",
+              asset = Waves
+            )
+          )
+        ),
+        ByteStr.decodeBase58("7M4pB9DLfBdmGAyoQL2R5hUga9woJatk5WiHNgU6jEFg").get -> TrackingAddressAssetsSettings.ReceiversSettings(
+          Set(
+            TrackingAddressAssetsSettings.ReceiverItemSettings(
+              address = "3FFhLVuFxy7Aes25wNHydccn4TSPuuZvNoG",
+              asset = Waves
+            )
+          )
+        )
+      )
+    )
+    settings.functionalitySettings.trackingAddressAssets.whitelistedTxs should be(
+      Set(ByteStr.decodeBase58("3F4RB9DLfBdmGAyaQL2R5hUga9woJatk5WiHNgU6jEFe").get)
+    )
     settings.genesisSettings.blockTimestamp should be(1460678400000L)
     settings.genesisSettings.timestamp should be(1460678400000L)
     settings.genesisSettings.signature should be(ByteStr.decodeBase58("BASE58BLKSGNATURE").toOption)

@@ -121,6 +121,7 @@ object Importer extends ScorexLogging {
           override def broadcastTransaction(tx: Transaction): TracedResult[ValidationError, Boolean] =
             TracedResult.wrapE(Left(GenericError("Not implemented during import")))
           override def spendableBalanceChanged: Observable[(Address, Asset)] = Observable.empty
+          override def trackingAddressAssets: Observable[(Address, Asset)]   = Observable.empty
           override def actorSystem: ActorSystem                              = extensionActorSystem
           override def blockchainUpdated: Observable[BlockchainUpdated]      = blockchainUpdatedObservable
           override def utxEvents: Observable[UtxEvent]                       = Observable.empty
@@ -252,7 +253,7 @@ object Importer extends ScorexLogging {
     val db                       = openDB(settings.dbSettings.directory)
     val (blockchainUpdater, levelDb) =
       StorageFactory(settings, db, time, Observer.empty, blockchainUpdateTriggers)
-    val utxPool     = new UtxPoolImpl(time, blockchainUpdater, PublishSubject(), settings.utxSettings)
+    val utxPool     = new UtxPoolImpl(time, blockchainUpdater, PublishSubject(), PublishSubject(), settings.utxSettings, getBadAssetsDiff = (_, _) => Map.empty)
     val pos         = PoSSelector(blockchainUpdater, settings.synchronizationSettings)
     val extAppender = BlockAppender(blockchainUpdater, time, utxPool, pos, scheduler, importOptions.verify) _
 

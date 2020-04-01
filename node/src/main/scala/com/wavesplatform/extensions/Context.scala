@@ -34,4 +34,6 @@ trait Context {
   def blockchainUpdated: Observable[BlockchainUpdated]
   def utxEvents: Observable[UtxEvent]
   def actorSystem: ActorSystem
+
+  def trackingAddressAssets: Observable[(Address, Asset)]
 }

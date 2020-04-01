@@ -11,6 +11,7 @@ import com.wavesplatform.api.http.requests.IssueRequest
 import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.features.api.{ActivationStatus, FeatureActivationStatus}
+import com.wavesplatform.http.DebugApiRoute.TrackedAssetsAccount
 import com.wavesplatform.http.DebugMessage
 import com.wavesplatform.it.Node
 import com.wavesplatform.it.sync._
@@ -254,6 +255,12 @@ object SyncHttpApi extends Assertions {
 
     def debugPortfoliosFor(address: String, considerUnspent: Boolean, amountsAsStrings: Boolean = false): Portfolio =
       sync(async(n).debugPortfoliosFor(address, considerUnspent, amountsAsStrings))
+
+    def debugTrackedAssets(address: String): Seq[String] = sync(async(n).debugTrackedAssets(address))
+
+    def debugBalanceDetails(address: String, asset: String): DebugBalanceDetails = sync(async(n).debugBalanceDetails(address, asset))
+
+    def debugAllTrackedAssetsByAssetId(asset: String): Map[String, TrackedAssetsAccount] = sync(async(n).debugAllTrackedAssetsByAssetId(asset))
 
     def broadcastIssue(
         source: KeyPair,

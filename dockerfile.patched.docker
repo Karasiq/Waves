@@ -1,0 +1,26 @@
+FROM openjdk:11-jre-slim-buster
+ARG WAVES_LOG_LEVEL="DEBUG"
+ARG WAVES_HEAP_SIZE="4g"
+ARG WAVES_NETWORK="mainnet"
+
+ENV WAVES_LOG_LEVEL=$WAVES_LOG_LEVEL
+ENV WAVES_HEAP_SIZE=$WAVES_HEAP_SIZE
+ENV WAVES_NETWORK=$WAVES_NETWORK
+
+COPY node/target/waves-all-*.jar /usr/share/waves/lib/
+COPY node/waves-*.conf /usr/share/waves/conf/
+COPY docker/entrypoint.sh /usr/share/waves/bin/
+
+RUN groupadd -g 143 waves                                                   &&  \
+    useradd -d /var/lib/waves -g 143 -u 143 -s /bin/bash -M waves           &&  \
+    mkdir -p /var/lib/waves /etc/waves                                      &&  \
+    chown -R 143:143 /var/lib/waves /usr/share/waves /etc/waves             &&  \
+    chmod -R 755 /var/lib/waves /usr/share/waves /etc/waves                 &&  \
+    ln -fs /var/lib/waves/log /var/log/waves
+
+WORKDIR /var/lib/waves
+EXPOSE 6869 6868 6863 6862
+
+USER waves
+VOLUME /var/lib/waves
+ENTRYPOINT ["/usr/share/waves/bin/entrypoint.sh"]

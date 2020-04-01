@@ -239,7 +239,14 @@ class UtxFailedTxsSpec extends FlatSpec with Matchers with WithDomain with Event
         TxHelpers.genesis(dApp.toAddress, Long.MaxValue / 3)
       )
 
-      val utx = new UtxPoolImpl(ntpTime, d.blockchainUpdater, PublishSubject(), settings.utxSettings)
+      val utx = new UtxPoolImpl(
+        ntpTime,
+        d.blockchainUpdater,
+        PublishSubject(),
+        ignoreSpendableBalanceChanged,
+        settings.utxSettings,
+        getBadAssetsDiff = (_, _) => Map.empty
+      )
       f(d, utx)
       utx.close()
     }

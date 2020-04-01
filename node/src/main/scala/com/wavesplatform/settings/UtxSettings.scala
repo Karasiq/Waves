@@ -7,5 +7,6 @@ case class UtxSettings(
     blacklistSenderAddresses: Set[String],
     allowBlacklistedTransferTo: Set[String],
     allowTransactionsFromSmartAccounts: Boolean,
-    allowSkipChecks: Boolean
+    allowSkipChecks: Boolean,
+    ignoreExchangeSenderPkInPessimisticPortfolio: Option[String] = None
 )
