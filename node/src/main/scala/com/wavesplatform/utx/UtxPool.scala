@@ -25,6 +25,7 @@ trait UtxPool extends AutoCloseable {
       cancelled: () => Boolean = () => false
   ): (Option[Seq[Transaction]], MultiDimensionalMiningConstraint)
   def nextMicroBlockSize(): Option[Int]
+  def badAddressAssets(address: Address): Map[Asset, Long]
 }
 
 object UtxPool {

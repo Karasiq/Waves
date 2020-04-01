@@ -75,10 +75,10 @@ class MiningWithRewardSuite extends AsyncFlatSpec with Matchers with WithDB with
         val recipient1 = createAccount.toAddress
         val recipient2 = createAccount.toAddress
         val tx1 = TransferTransaction
-          .selfSigned(2.toByte, account, recipient1, Waves, 10 * Constants.UnitsInWave, Waves, 400000, ByteStr.empty, ts)
+          .selfSigned(2.toByte, account, recipient1, Waves, 10 * Constants.UnitsInWave, Waves, 400000L, ByteStr.empty, ts)
           .explicitGet()
         val tx2 = TransferTransaction
-          .selfSigned(2.toByte, account, recipient2, Waves, 5 * Constants.UnitsInWave, Waves, 400000, ByteStr.empty, ts)
+          .selfSigned(2.toByte, account, recipient2, Waves, 5 * Constants.UnitsInWave, Waves, 400000L, ByteStr.empty, ts)
           .explicitGet()
         TestBlock.create(time = ts, ref = reference, txs = Seq(tx1, tx2), version = Block.NgBlockVersion)
       }
@@ -88,7 +88,7 @@ class MiningWithRewardSuite extends AsyncFlatSpec with Matchers with WithDB with
       (ts, account) => {
         val recipient1 = createAccount.toAddress
         TransferTransaction
-          .selfSigned(2.toByte, account, recipient1, Waves, 10 * Constants.UnitsInWave, Waves, 400000, ByteStr.empty, ts)
+          .selfSigned(2.toByte, account, recipient1, Waves, 10 * Constants.UnitsInWave, Waves, 400000L, ByteStr.empty, ts)
           .explicitGet()
       }
     )
@@ -121,7 +121,7 @@ class MiningWithRewardSuite extends AsyncFlatSpec with Matchers with WithDB with
         for {
           _ <- Task.unit
           pos          = PoSSelector(blockchainUpdater, settings.synchronizationSettings)
-          utxPool      = new UtxPoolImpl(ntpTime, blockchainUpdater, ignoreSpendableBalanceChanged, settings.utxSettings)
+          utxPool      = new UtxPoolImpl(ntpTime, blockchainUpdater, ignoreSpendableBalanceChanged, ignoreSpendableBalanceChanged, settings.utxSettings, getBadAssetsDiff = (_, _) => Map.empty)
           scheduler    = Scheduler.singleThread("appender")
           allChannels  = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE)
           wallet       = Wallet(WalletSettings(None, Some("123"), None))

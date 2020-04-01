@@ -12,7 +12,7 @@ import com.wavesplatform.features.BlockchainFeatures
 import com.wavesplatform.history.Domain.BlockchainUpdaterExt
 import com.wavesplatform.lagonaki.mocks.TestBlock
 import com.wavesplatform.mining.MiningConstraint
-import com.wavesplatform.settings.{Constants, FunctionalitySettings, RewardsSettings}
+import com.wavesplatform.settings.{Constants, FunctionalitySettings, RewardsSettings, TrackingAddressAssetsSettings}
 import com.wavesplatform.state.diffs.BlockDiffer
 import com.wavesplatform.state.{Blockchain, Height}
 import com.wavesplatform.transaction.Asset.Waves
@@ -45,7 +45,8 @@ class BlockRewardSpec
           BlockchainFeatures.BlockReward.id    -> BlockRewardActivationHeight,
           BlockchainFeatures.NG.id             -> NGActivationHeight,
           BlockchainFeatures.FeeSponsorship.id -> -10
-        )
+        ),
+        trackingAddressAssets = TrackingAddressAssetsSettings.empty
       ),
       rewardsSettings = RewardsSettings(
         10,
@@ -447,7 +448,8 @@ class BlockRewardSpec
           BlockchainFeatures.BlockReward.id    -> 4,
           BlockchainFeatures.NG.id             -> NGActivationHeight,
           BlockchainFeatures.FeeSponsorship.id -> -10
-        )
+        ),
+        trackingAddressAssets = TrackingAddressAssetsSettings.empty
       ),
       rewardsSettings = RewardsSettings(12, 6 * Constants.UnitsInWave, 1 * Constants.UnitsInWave, 6)
     )
@@ -511,7 +513,8 @@ class BlockRewardSpec
           BlockchainFeatures.BlockReward.id    -> 4,
           BlockchainFeatures.NG.id             -> NGActivationHeight,
           BlockchainFeatures.FeeSponsorship.id -> -10
-        )
+        ),
+        trackingAddressAssets = TrackingAddressAssetsSettings.empty
       ),
       rewardsSettings = RewardsSettings(3, 6 * Constants.UnitsInWave, 1 * Constants.UnitsInWave, 2)
     )

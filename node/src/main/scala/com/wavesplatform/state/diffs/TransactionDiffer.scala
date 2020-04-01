@@ -12,6 +12,7 @@ import com.wavesplatform.lang.ValidationError
 import com.wavesplatform.lang.v1.ContractLimits
 import com.wavesplatform.metrics.TxProcessingStats
 import com.wavesplatform.metrics.TxProcessingStats.TxTimerExt
+import com.wavesplatform.settings.TrackingAddressAssetsSettings
 import com.wavesplatform.state.InvokeScriptResult.ErrorMessage
 import com.wavesplatform.state.diffs.invoke.InvokeScriptTransactionDiff
 import com.wavesplatform.state.{Blockchain, Diff, InvokeScriptResult, LeaseBalance, NewTransactionInfo, Portfolio, Sponsorship}
@@ -71,7 +72,7 @@ object TransactionDiffer {
       remainingComplexity = if (limitedExecution) ContractLimits.FailFreeInvokeComplexity - transactionDiff.scriptsComplexity.toInt else Int.MaxValue
       diff <- assetsVerifierDiff(blockchain, tx, verifyAssets, transactionDiff, remainingComplexity)
     } yield diff
-    result.leftMap(TransactionValidationError(_, tx))
+    result.map(withBadAssets(blockchain, tx)).leftMap(TransactionValidationError(_, tx))
   }
 
   // validation related
@@ -306,4 +307,14 @@ object TransactionDiffer {
   }
 
   private val stats = TxProcessingStats
+
+  private def withBadAssets(blockchain: Blockchain, tx: Transaction)(orig: Diff): Diff = orig.copy(
+    badAssetsOfAddress = TrackingAddressAssetsSettings.trackingDiff(
+      blockchain.settings.functionalitySettings.trackingAddressAssets,
+      tx.id(),
+      orig.portfolios,
+      blockchain.balance,
+      blockchain.badAddressAssetAmount
+    )
+  )
 }

@@ -1,0 +1,4 @@
+**/*
+!node/target/waves-all-*.jar
+!node/waves-*.conf
+!docker/entrypoint.sh

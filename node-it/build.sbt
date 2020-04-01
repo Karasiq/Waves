@@ -12,7 +12,11 @@ def stageFiles(ref: ProjectReference): TaskKey[File] =
 
 inTask(docker)(
   Seq(
-    imageNames := Seq(ImageName("com.wavesplatform/node-it")),
+    imageNames := Seq(
+      ImageName("com.wavesplatform/node-it"),
+      // 1.1.7-1-g0da0ad7-DIRTY -> 1.1.7.1
+      ImageName(s"wavesplatform/wavesnode:${"""(\d+\.\d+\.\d+(?:-\d+)).*$""".r.replaceAllIn(version.value, "$1").replace("-", ".")}")
+    ),
     exposedPorts := Set(6863, 6869, 6870), // NetworkApi, RestApi, gRPC
     additionalFiles ++= Seq(
       stageFiles(LocalProject("node")).value,

@@ -8,7 +8,7 @@ import com.wavesplatform.db.WithDomain
 import com.wavesplatform.features.BlockchainFeatures
 import com.wavesplatform.history.Domain.BlockchainUpdaterExt
 import com.wavesplatform.lagonaki.mocks.TestBlock
-import com.wavesplatform.settings.{Constants, FunctionalitySettings}
+import com.wavesplatform.settings.{Constants, FunctionalitySettings, TrackingAddressAssetsSettings}
 import com.wavesplatform.state.diffs.produce
 import com.wavesplatform.state.{Blockchain, LeaseBalance}
 import com.wavesplatform.transaction.GenesisTransaction
@@ -40,7 +40,8 @@ class LeasingExpirySpec
         preActivatedFeatures = Map(
           BlockchainFeatures.SmartAccounts.id   -> 0,
           BlockchainFeatures.LeaseExpiration.id -> LeasingExpiryActivationHeight
-        )
+        ),
+        trackingAddressAssets = TrackingAddressAssetsSettings.empty
       )
     )
   )

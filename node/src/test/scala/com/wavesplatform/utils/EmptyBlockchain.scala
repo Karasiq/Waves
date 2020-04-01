@@ -73,4 +73,8 @@ case object EmptyBlockchain extends Blockchain {
   override def balance(address: Address, mayBeAssetId: Asset): Long = 0
 
   override def leaseBalance(address: Address): LeaseBalance = LeaseBalance.empty
+
+  override def trackedAssets(address: Address): Set[Asset] = Set.empty
+
+  override def badAddressAssetAmount(address: Address, assetId: Asset): Long = 0L
 }

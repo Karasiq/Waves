@@ -32,6 +32,14 @@ final case class CompositeBlockchain(
   override def balance(address: Address, assetId: Asset): Long =
     inner.balance(address, assetId) + diff.portfolios.getOrElse(address, Portfolio.empty).balanceOf(assetId)
 
+  override def trackedAssets(address: Address): Set[Asset] =
+    inner.trackedAssets(address) ++ diff.badAssetsOfAddress.getOrElse(address, Map.empty).keySet
+
+  override def badAddressAssetAmount(address: Address, assetId: Asset): Long =
+    inner.badAddressAssetAmount(address, assetId) + diff.badAssetsOfAddress
+      .getOrElse(address, Map.empty)
+      .getOrElse(assetId, 0L)
+
   override def leaseBalance(address: Address): LeaseBalance = {
     cats.Monoid.combine(inner.leaseBalance(address), diff.portfolios.getOrElse(address, Portfolio.empty).lease)
   }

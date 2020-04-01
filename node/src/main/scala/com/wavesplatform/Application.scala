@@ -23,7 +23,7 @@ import com.wavesplatform.block.{Block, MicroBlock}
 import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.consensus.PoSSelector
 import com.wavesplatform.consensus.nxt.api.http.NxtConsensusApiRoute
-import com.wavesplatform.database.{DBExt, Keys, openDB}
+import com.wavesplatform.database.{DBExt, Keys, TrackedAssetsDB, openDB}
 import com.wavesplatform.events.{BlockchainUpdateTriggers, UtxEvent}
 import com.wavesplatform.extensions.{Context, Extension}
 import com.wavesplatform.features.EstimatorProvider._
@@ -35,7 +35,7 @@ import com.wavesplatform.metrics.Metrics
 import com.wavesplatform.mining.{Miner, MinerDebugInfo, MinerImpl}
 import com.wavesplatform.network.RxExtensionLoader.RxExtensionLoaderShutdownHook
 import com.wavesplatform.network._
-import com.wavesplatform.settings.WavesSettings
+import com.wavesplatform.settings.{TrackingAddressAssetsSettings, WavesSettings}
 import com.wavesplatform.state.appender.{BlockAppender, ExtensionAppender, MicroblockAppender}
 import com.wavesplatform.state.diffs.BlockDiffer
 import com.wavesplatform.state.{Blockchain, BlockchainUpdaterImpl, Diff, Height}
@@ -73,9 +73,13 @@ class Application(val actorSystem: ActorSystem, val settings: WavesSettings, con
 
   private val db = openDB(settings.dbSettings.directory)
 
+  private val trackedAssetsDB = TrackedAssetsDB(db)
+
   private val LocalScoreBroadcastDebounce = 1.second
 
   private val spendableBalanceChanged = ConcurrentSubject.publish[(Address, Asset)]
+
+  private val trackingAddressAssets = ConcurrentSubject.publish[(Address, Asset)]
 
   private lazy val upnp = new UPnP(settings.networkSettings.uPnPSettings) // don't initialize unless enabled
 
@@ -155,7 +159,22 @@ class Application(val actorSystem: ActorSystem, val settings: WavesSettings, con
     val establishedConnections = new ConcurrentHashMap[Channel, PeerInfo]
     val allChannels            = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE)
     val utxStorage =
-      new UtxPoolImpl(time, blockchainUpdater, spendableBalanceChanged, settings.utxSettings, utxEvents.onNext)
+      new UtxPoolImpl(
+        time,
+        blockchainUpdater,
+        spendableBalanceChanged,
+        trackingAddressAssets,
+        settings.utxSettings,
+        utxEvents.onNext,
+        getBadAssetsDiff = (txId, diff) =>
+          TrackingAddressAssetsSettings.trackingDiff(
+            settings.blockchainSettings.functionalitySettings.trackingAddressAssets,
+            txId,
+            diff.portfolios,
+            blockchainUpdater.balance,
+            blockchainUpdater.badAddressAssetAmount
+          )
+      )
     maybeUtx = Some(utxStorage)
 
     val timer                 = new HashedWheelTimer()
@@ -234,6 +253,7 @@ class Application(val actorSystem: ActorSystem, val settings: WavesSettings, con
       override def spendableBalanceChanged: Observable[(Address, Asset)]                         = app.spendableBalanceChanged
       override def actorSystem: ActorSystem                                                      = app.actorSystem
       override def utxEvents: Observable[UtxEvent]                                               = app.utxEvents
+      override def trackingAddressAssets: Observable[(Address, Asset)]                           = app.trackingAddressAssets
 
       override val transactionsApi: CommonTransactionsApi = CommonTransactionsApi(
         blockchainUpdater.bestLiquidDiff.map(diff => Height(blockchainUpdater.height) -> diff),
@@ -390,7 +410,8 @@ class Application(val actorSystem: ActorSystem, val settings: WavesSettings, con
           scoreStatsReporter,
           configRoot,
           loadBalanceHistory,
-          levelDB.loadStateHash
+          levelDB.loadStateHash,
+          trackedAssetsDB
         ),
         AssetsApiRoute(
           settings.restAPISettings,
@@ -428,6 +449,7 @@ class Application(val actorSystem: ActorSystem, val settings: WavesSettings, con
   def shutdown(utx: UtxPool, network: NS): Unit =
     if (shutdownInProgress.compareAndSet(false, true)) {
       spendableBalanceChanged.onComplete()
+      trackingAddressAssets.onComplete()
       utx.close()
 
       shutdownAndWait(historyRepliesScheduler, "HistoryReplier", 5.minutes.some)

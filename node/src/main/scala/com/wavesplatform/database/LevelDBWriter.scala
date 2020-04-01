@@ -36,6 +36,7 @@ import org.iq80.leveldb.DB
 import org.slf4j.LoggerFactory
 
 import scala.annotation.tailrec
+import scala.collection.mutable
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import scala.jdk.CollectionConverters._
 import scala.util.Try
@@ -249,6 +250,18 @@ abstract class LevelDBWriter private[database] (
       }
     }
 
+  override def trackedAssets(address: Address): Set[Asset] = readOnly { db =>
+    addressId(address).fold(Set.empty[Asset]) { addressId =>
+      db.get(Keys.trackedAssets(addressId))
+    }
+  }
+
+  protected override def loadBadAssets(req: (Address, Asset)): Long = readOnly { db =>
+    addressId(req._1).fold(0L) { addressId =>
+      db.fromHistory(Keys.trackedAssetsHistory(addressId, req._2), Keys.badAssets(addressId, req._2)).getOrElse(0L)
+    }
+  }
+
   private def loadLeaseBalance(db: ReadOnlyDB, addressId: AddressId): LeaseBalance =
     db.fromHistory(Keys.leaseBalanceHistory(addressId), Keys.leaseBalance(addressId)).getOrElse(LeaseBalance.empty)
 
@@ -375,7 +388,8 @@ abstract class LevelDBWriter private[database] (
       hitSource: ByteStr,
       scriptResults: Map[ByteStr, InvokeScriptResult],
       failedTransactionIds: Set[ByteStr],
-      stateHash: StateHashBuilder.Result
+      stateHash: StateHashBuilder.Result,
+      badAssetsOfAddress: Map[AddressId, Map[Asset, Long]]
   ): Unit = {
     log.trace(s"Persisting block ${block.id()} at height $height")
     readWrite { rw =>
@@ -410,9 +424,11 @@ abstract class LevelDBWriter private[database] (
       rw.put(Keys.lastAddressId, Some(lastAddressId))
       rw.put(Keys.score(height), rw.get(Keys.score(height - 1)) + block.blockScore())
 
+      val newAddressesById = mutable.Map.empty[AddressId, Address]
       for ((address, id) <- newAddresses) {
         rw.put(Keys.addressId(address), Some(id))
         rw.put(Keys.idToAddress(id), address)
+        newAddressesById.put(id, address)
       }
 
       val threshold        = height - dbSettings.maxRollbackDepth
@@ -585,6 +601,31 @@ abstract class LevelDBWriter private[database] (
         val newStateHash = stateHash.createStateHash(prevStateHash)
         rw.put(Keys.stateHash(height), Some(newStateHash))
       }
+
+      // Tracking starts
+      for ((addressId, assets) <- badAssetsOfAddress) {
+        val prevAssets = rw.get(Keys.trackedAssets(addressId))
+        val newAssets  = assets.keySet -- prevAssets
+
+        val address = newAddressesById.getOrElse(addressId, rw.get(Keys.idToAddress(addressId)))
+
+        if (newAssets.nonEmpty) {
+          log.info(s"New tracked assets for $address at height: $height: ${assets.mkString(", ")}")
+        }
+
+        rw.put(Keys.trackedAssets(addressId), newAssets ++ prevAssets)
+        for ((assetId, balance) <- assets) {
+          log.info(s"Bad balance changed for $address at height $height: $assetId -> $balance")
+          rw.put(Keys.badAssets(addressId, assetId)(height), balance)
+          expiredKeys ++= updateHistory(
+            rw,
+            Keys.trackedAssetsHistory(addressId, assetId),
+            threshold,
+            Keys.badAssets(addressId, assetId)
+          )
+        }
+      }
+      // Tracking ends
     }
 
     log.trace(s"Finished persisting block ${block.id()} at height $height")
@@ -600,6 +641,8 @@ abstract class LevelDBWriter private[database] (
         val scriptsToDiscard        = Seq.newBuilder[Address]
         val assetScriptsToDiscard   = Seq.newBuilder[IssuedAsset]
         val accountDataToInvalidate = Seq.newBuilder[(Address, String)]
+
+        val trackedAddressAssetsToInvalidate = Seq.newBuilder[(Address, Asset)]
 
         val h = Height(currentHeight)
 
@@ -639,6 +682,12 @@ abstract class LevelDBWriter private[database] (
               rw.filterHistory(Keys.dataHistory(address, k), currentHeight)
             }
             rw.delete(Keys.changedDataKeys(currentHeight, addressId))
+
+            for (assetId <- rw.get(Keys.trackedAssets(addressId))) {
+              trackedAddressAssetsToInvalidate += (address -> assetId)
+              rw.delete(Keys.badAssets(addressId, assetId)(currentHeight))
+              rw.filterHistory(Keys.trackedAssetsHistory(addressId, assetId), currentHeight)
+            }
 
             balancesToInvalidate += (address -> Waves)
             rw.delete(Keys.wavesBalance(addressId)(currentHeight))
@@ -740,6 +789,7 @@ abstract class LevelDBWriter private[database] (
         scriptsToDiscard.result().foreach(discardScript)
         assetScriptsToDiscard.result().foreach(discardAssetScript)
         accountDataToInvalidate.result().foreach(discardAccountData)
+        trackedAddressAssetsToInvalidate.result().foreach(discardTrackedAddressAssets)
         discardedBlock
       }
 

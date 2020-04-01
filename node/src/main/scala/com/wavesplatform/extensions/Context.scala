@@ -33,4 +33,6 @@ trait Context {
   def spendableBalanceChanged: Observable[(Address, Asset)]
   def utxEvents: Observable[UtxEvent]
   def actorSystem: ActorSystem
+
+  def trackingAddressAssets: Observable[(Address, Asset)]
 }

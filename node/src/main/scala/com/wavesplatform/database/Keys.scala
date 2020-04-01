@@ -9,7 +9,7 @@ import com.wavesplatform.database.protobuf.TransactionMeta
 import com.wavesplatform.protobuf.transaction.PBRecipients
 import com.wavesplatform.state._
 import com.wavesplatform.transaction.Asset.IssuedAsset
-import com.wavesplatform.transaction.Transaction
+import com.wavesplatform.transaction.{Asset, Transaction}
 import com.wavesplatform.utils._
 
 object Keys {
@@ -47,7 +47,6 @@ object Keys {
     Key(UpdatedAssets, h(height), d => readAssetIds(d).map(IssuedAsset), ias => writeAssetIds(ias.map(_.id)))
   def sponsorshipAssets(height: Int): Key[Seq[IssuedAsset]] =
     Key(SponsoredAssets, h(height), d => readAssetIds(d).map(IssuedAsset), ias => writeAssetIds(ias.map(_.id)))
-
 
   def leaseBalanceHistory(addressId: AddressId): Key[Seq[Int]] = historyKey(LeaseBalanceHistory, addressId.toByteArray)
   def leaseBalance(addressId: AddressId)(height: Int): Key[LeaseBalance] =
@@ -178,4 +177,15 @@ object Keys {
 
   def stateHash(height: Int): Key[Option[StateHash]] =
     Key.opt(StateHash, h(height), readStateHash, writeStateHash)
+
+  // Tracking
+
+  def trackedAssets(addressId: AddressId): Key[Set[Asset]] =
+    Key(TrackedAssets, addressId.toByteArray, readAssets, writeAssets)
+
+  def trackedAssetsHistory(addressId: AddressId, asset: Asset): Key[Seq[Int]] =
+    historyKey(TrackedAssetsHistory, addressId.toByteArray ++ asset.byteRepr)
+
+  def badAssets(addressId: AddressId, asset: Asset)(height: Int): Key[Long] =
+    Key(BadAssets, hBytes(addressId.toByteArray ++ writeAsset(asset), height), Option(_).fold(0L)(Longs.fromByteArray), Longs.toByteArray)
 }

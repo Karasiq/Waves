@@ -69,6 +69,9 @@ trait Blockchain {
   def leaseBalance(address: Address): LeaseBalance
 
   def balance(address: Address, mayBeAssetId: Asset = Waves): Long
+
+  def trackedAssets(address: Address): Set[Asset]
+  def badAddressAssetAmount(address: Address, assetId: Asset): Long
 }
 
 object Blockchain {
@@ -173,8 +176,7 @@ object Blockchain {
       if (isFeatureActivated(BlockchainFeatures.BlockV5, height)) ProtoBlockVersion
       else if (isFeatureActivated(BlockchainFeatures.BlockReward, height)) {
         if (blockchain.activatedFeatures(BlockchainFeatures.BlockReward.id) == height) NgBlockVersion else RewardBlockVersion
-      }
-      else if (blockchain.settings.functionalitySettings.blockVersion3AfterHeight + 1 < height) NgBlockVersion
+      } else if (blockchain.settings.functionalitySettings.blockVersion3AfterHeight + 1 < height) NgBlockVersion
       else if (height > 1) PlainBlockVersion
       else GenesisBlockVersion
   }
