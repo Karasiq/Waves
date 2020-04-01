@@ -63,7 +63,7 @@ class BalancesDB(nodeAddress: Address, safeAddress: Address) extends ScorexLoggi
       val finalReward = rewards - fees
       if (balance != initialBalance) {
         log.info(s"New $nodeAddress balance is ${balance.toDouble / 100000000} waves")
-        val expired = updateHistory(rw, history, Keys.volkBalanceHistory(nodeAddress), height - 2000, Keys.volkBalance(nodeAddress, _))
+        val expired = updateHistory(rw, history, Keys.volkBalanceHistory(nodeAddress), height - 10000, Keys.volkBalance(nodeAddress, _))
         rw.put(Keys.volkBalance(nodeAddress, height), balance)
         expired.foreach(rw.delete(_, "volk-balance"))
       }

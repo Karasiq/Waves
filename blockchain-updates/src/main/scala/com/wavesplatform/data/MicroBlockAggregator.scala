@@ -18,6 +18,9 @@ class MicroBlockAggregator {
     microBlocks = microBlocks.filterNot(_.id == id) :+ MicroBlockDiff(id, stateUpdate, txUpdates, transactions)
   }
 
+  def keyBlockId: ByteString =
+    microBlocks.headOption.fold(ByteString.EMPTY)(_.id)
+
   def rollback(height: Int, id: ByteString): Unit = {
     if (this.height == height && microBlocks.exists(_.id == id))
       microBlocks = microBlocks.takeWhile(_.id != id) ++ microBlocks.filter(_.id == id)

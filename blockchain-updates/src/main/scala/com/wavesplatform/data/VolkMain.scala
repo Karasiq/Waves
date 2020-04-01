@@ -2,7 +2,6 @@ package com.wavesplatform.data
 
 import java.time._
 
-import com.google.protobuf.ByteString
 import com.wavesplatform.account.{Address, AddressScheme}
 import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.events.protobuf.{BlockchainUpdated, StateUpdate}
@@ -34,12 +33,13 @@ object VolkMain extends App with ScorexLogging {
   val nodeAddress: Address = Address.fromString(sys.env("VOLK_NODE")).right.get
   val safeAddress: Address = Address.fromString(sys.env("VOLK_SAFE")).right.get
 
-  val aggr      = new MicroBlockAggregator
-  var lastMined = Instant.now()
-  val db        = new BalancesDB(nodeAddress, safeAddress)
+  val aggr             = new MicroBlockAggregator
+  var lastMined        = Instant.now()
+  var rollbacksEnabled = false
+  val db               = new BalancesDB(nodeAddress, safeAddress)
 
   channels.foreach(DiscordSender.sendMessage(_, s"Node monitor started, last checked height is ${db.lastHeight}"))
-  val pa = new PollingAgent(startHeight)
+  val pa = new PollingAgent(if (db.lastHeight == 0) startHeight else 0)
   pa.start(_.foreach {
     case BlockchainUpdated(
         id,
@@ -55,6 +55,7 @@ object VolkMain extends App with ScorexLogging {
         BlockchainUpdated.Update.Append(BlockchainUpdated.Append(_, stateUpdateOpt, txUpdates, BlockchainUpdated.Append.Body.Block(block)))
         ) if nextHeight > db.lastHeight && nextHeight > startHeight =>
       // if (nextHeight != aggr.height + 1) log.warn(s"Height skip: ${db.lastHeight} -> $nextHeight")
+      rollbacksEnabled = true // Arrived to the correct offset
       val height                  = nextHeight - 1
       val stateUpdate             = stateUpdateOpt.getOrElse(StateUpdate.defaultInstance)
       val (updates, transactions) = aggr.finishBlock(nextHeight, id, stateUpdate, txUpdates, block.transactions)
@@ -79,8 +80,14 @@ object VolkMain extends App with ScorexLogging {
         channels.foreach(ch => sendNotification(ch, height, tx.id(), typeStr, alarm = true))
       }
 
+      val isToday = {
+        val today = LocalDate.now(ZoneId.of("UTC"))
+        val ts    = LocalDateTime.ofInstant(Instant.ofEpochMilli(block.getHeader.timestamp), ZoneId.of("UTC")).toLocalDate
+        today.compareTo(ts) == 0
+      }
+
       val watchedAddrs = Set(nodeAddress, safeAddress)
-      if (height > startHeight) transactions.flatMap(parseTransaction) foreach {
+      if (isToday) transactions.flatMap(parseTransaction) foreach {
         case transfer: TransferTransaction
             if transfer.sender.toAddress == nodeAddress && transfer.recipient == safeAddress && transfer.assetId == Waves =>
           simpleNotify(transfer, s"transfer ${transfer.amount / 100000000}W to safe")
@@ -100,11 +107,6 @@ object VolkMain extends App with ScorexLogging {
       val isNodeGenerated = PBBlocks.vanilla(block.getHeader).generator.toAddress == nodeAddress
       // log.info(s"New block: $height, generated $isNodeGenerated")
       val rewards = db.saveBalances(height, updates, transactions.flatMap(parseTransaction))
-      val isToday = {
-        val today = LocalDate.now(ZoneId.of("UTC"))
-        val ts    = LocalDateTime.ofInstant(Instant.ofEpochMilli(block.getHeader.timestamp), ZoneId.of("UTC")).toLocalDate
-        today.compareTo(ts) == 0
-      }
 
       if (isToday) {
         if (isNodeGenerated) lastMined = Instant.now()
@@ -117,17 +119,21 @@ object VolkMain extends App with ScorexLogging {
       if (rewards != 0 && isToday) Stats.update(rewards)
       Stats.publish(channels)
 
-    case BlockchainUpdated(_, height, BlockchainUpdated.Update.Rollback(rollback)) if rollback.isBlock && height + 2000 > startHeight =>
-      // log.info(s"Rollback to $height")
+    case e @ BlockchainUpdated(_, height, BlockchainUpdated.Update.Rollback(rollback))
+        if rollback.isBlock && db.lastHeight >= height && rollbacksEnabled =>
+      if (height < db.lastHeight - 100) log.warn(s"Rollback to $height: $e")
+      if (height < db.lastHeight - 10000) {
+        channels.foreach(DiscordSender.sendMessage(_, s"Unable to rollback to $height, stopping"))
+        sys.error(s"Unable to rollback to $height")
+      }
       db.rollback(height)
-      aggr.rollback(height, ByteString.EMPTY)
+      aggr.rollback(height, aggr.keyBlockId)
 
     case BlockchainUpdated(id, height, BlockchainUpdated.Update.Rollback(rollback)) if rollback.isMicroblock && height > startHeight =>
       // log.info(s"Rollback to ${ByteStr(id.toByteArray)}")
       aggr.rollback(height, id)
 
-    case e =>
-    // log.warn(s"Event ignored at ${e.height}: ${e.id} ${e.update.getClass.toString}")
+    case e => // log.warn(s"Event ignored at ${e.height}: ${e.id} ${e.update.getClass.toString}")
   })
 
   object Stats {
