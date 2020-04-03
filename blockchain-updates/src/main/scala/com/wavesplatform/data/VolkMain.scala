@@ -59,16 +59,6 @@ object VolkMain extends App with ScorexLogging {
       val height                  = nextHeight - 1
       val stateUpdate             = stateUpdateOpt.getOrElse(StateUpdate.defaultInstance)
       val (updates, transactions) = aggr.finishBlock(nextHeight, id, stateUpdate, txUpdates, block.transactions)
-      val (newLeases, cancelled) = transactions.flatMap(parseTransaction).foldLeft(Set.empty[ByteStr] -> Set.empty[ByteStr]) {
-        case ((leases, cancels), tx) =>
-          tx match {
-            case lt: LeaseTransaction if lt.recipient == nodeAddress          => (leases + lt.id(), cancels)
-            case lc: LeaseCancelTransaction if cancels.contains(lc.id())      => (leases - lc.leaseId, cancels)
-            case lc: LeaseCancelTransaction if db.leases.contains(lc.leaseId) => (leases, cancels + lc.leaseId)
-            case _                                                            => (leases, cancels)
-          }
-      }
-      if (newLeases.nonEmpty || cancelled.nonEmpty) db.addLeases(newLeases, cancelled)
 
       def simpleNotify(tx: Transaction, typeStr: String): Unit = {
         log.info(s"Simple alert ($typeStr): $tx")
@@ -103,6 +93,17 @@ object VolkMain extends App with ScorexLogging {
 
         case _ => // Ignore
       }
+
+      val (newLeases, cancelled) = transactions.flatMap(parseTransaction).foldLeft(Set.empty[ByteStr] -> Set.empty[ByteStr]) {
+        case ((leases, cancels), tx) =>
+          tx match {
+            case lt: LeaseTransaction if lt.recipient == nodeAddress          => (leases + lt.id(), cancels)
+            case lc: LeaseCancelTransaction if cancels.contains(lc.id())      => (leases - lc.leaseId, cancels)
+            case lc: LeaseCancelTransaction if db.leases.contains(lc.leaseId) => (leases, cancels + lc.leaseId)
+            case _                                                            => (leases, cancels)
+          }
+      }
+      if (newLeases.nonEmpty || cancelled.nonEmpty) db.addLeases(newLeases, cancelled)
 
       val isNodeGenerated = PBBlocks.vanilla(block.getHeader).generator.toAddress == nodeAddress
       // log.info(s"New block: $height, generated $isNodeGenerated")

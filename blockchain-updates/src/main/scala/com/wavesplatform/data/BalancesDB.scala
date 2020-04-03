@@ -103,6 +103,7 @@ class BalancesDB(nodeAddress: Address, safeAddress: Address) extends ScorexLoggi
   }
 
   def addLeases(leaseIds: Set[ByteStr], removed: Set[ByteStr]): Unit = db.readWrite { rw =>
+    log.info(s"New leases: $leaseIds, cancelled: $removed")
     val leases    = Try(rw.get(Keys.volkLeases())).getOrElse(Set.empty)
     val newLeases = leases ++ leaseIds -- removed
     rw.put(Keys.volkLeases(), newLeases)
