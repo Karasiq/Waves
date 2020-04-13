@@ -33,10 +33,11 @@ object VolkMain extends App with ScorexLogging {
   val nodeAddress: Address = Address.fromString(sys.env("VOLK_NODE")).right.get
   val safeAddress: Address = Address.fromString(sys.env("VOLK_SAFE")).right.get
 
-  val aggr             = new MicroBlockAggregator
-  var lastMined        = Instant.now()
-  var rollbacksEnabled = false
-  val db               = new BalancesDB(nodeAddress, safeAddress)
+  val aggr              = new MicroBlockAggregator
+  var lastMined         = Instant.now()
+  var lastMinedNotified = 0
+  var rollbacksEnabled  = false
+  val db                = new BalancesDB(nodeAddress, safeAddress)
 
   channels.foreach(DiscordSender.sendMessage(_, s"Node monitor started, last checked height is ${db.lastHeight}"))
   val pa = new PollingAgent(if (db.lastHeight == 0) startHeight else 0)
@@ -110,10 +111,15 @@ object VolkMain extends App with ScorexLogging {
       val rewards = db.saveBalances(height, updates, transactions.flatMap(parseTransaction))
 
       if (isToday) {
-        if (isNodeGenerated) lastMined = Instant.now()
-        else if (lastMined.plus(Duration.ofHours(3)).compareTo(Instant.now()) < 0) {
-          channels.foreach(DiscordSender.sendMessage(_, "**Warning**: Last block generated more than 3 hours ago"))
+        if (isNodeGenerated) {
           lastMined = Instant.now()
+          lastMinedNotified = 0
+        } else if (lastMined.plus(Duration.ofHours(4)).compareTo(Instant.now()) < 0 && lastMinedNotified < 2) {
+          channels.foreach(DiscordSender.sendMessage(_, "@everyone **Warning**: Last block generated more than 4 hours ago"))
+          lastMinedNotified = 2
+        } else if (lastMined.plus(Duration.ofHours(3)).compareTo(Instant.now()) < 0 && lastMinedNotified < 1) {
+          channels.foreach(DiscordSender.sendMessage(_, "**Warning**: Last block generated more than 3 hours ago"))
+          lastMinedNotified = 1
         }
       }
 
@@ -139,7 +145,7 @@ object VolkMain extends App with ScorexLogging {
 
   object Stats {
     val zoneId: ZoneId = ZoneId.of("Europe/Moscow")
-    var lastTime       = LocalDate.now().atTime(18, 0).atZone(zoneId)
+    var sendTime       = LocalDate.now().atTime(18, 0).atZone(zoneId)
     var balance        = 0L
 
     def update(rewards: Long): Unit = {
@@ -149,11 +155,11 @@ object VolkMain extends App with ScorexLogging {
 
     def publish(channels: Seq[String]): Unit = {
       val now = ZonedDateTime.now(zoneId)
-      if (now.compareTo(this.lastTime) >= 0) {
+      if (now.compareTo(this.sendTime) >= 0) {
         try {
           channels.foreach(sendStats)
           this.balance = 0
-          this.lastTime = now.plusDays(1)
+          this.sendTime = LocalDate.now().atTime(18, 0).atZone(zoneId).plusDays(1)
           log.info("Daily stats sent")
         } catch { case NonFatal(e) => log.error("Error sending stats", e) }
       }
