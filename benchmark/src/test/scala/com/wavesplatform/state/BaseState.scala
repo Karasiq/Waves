@@ -3,15 +3,18 @@ package com.wavesplatform.state
 import java.io.File
 import java.nio.file.Files
 
-import com.wavesplatform.account.PrivateKeyAccount
+import com.wavesplatform.account.KeyPair
 import com.wavesplatform.block.Block
-import com.wavesplatform.database.LevelDBWriter
-import com.wavesplatform.db.LevelDBFactory
+import com.wavesplatform.common.utils.EitherExt2
+import com.wavesplatform.database.{LevelDBFactory, LevelDBWriter}
 import com.wavesplatform.lagonaki.mocks.TestBlock
 import com.wavesplatform.mining.MiningConstraint
 import com.wavesplatform.settings.FunctionalitySettings
 import com.wavesplatform.state.diffs.BlockDiffer
+import com.wavesplatform.state.utils.TestLevelDB
 import com.wavesplatform.transaction.{GenesisTransaction, Transaction}
+import monix.execution.UncaughtExceptionReporter
+import monix.reactive.Observer
 import org.iq80.leveldb.{DB, Options}
 import org.openjdk.jmh.annotations.{Setup, TearDown}
 import org.scalacheck.{Arbitrary, Gen}
@@ -27,34 +30,36 @@ trait BaseState {
     LevelDBFactory.factory.open(new File(dir), options)
   }
 
-  val state: LevelDBWriter = new LevelDBWriter(db, fsSettings, 100000, 2000, 120 * 60 * 1000)
+  private val portfolioChanges = Observer.empty(UncaughtExceptionReporter.default)
+  val state: LevelDBWriter     = TestLevelDB.withFunctionalitySettings(db, portfolioChanges, fsSettings)
 
-  private var _richAccount: PrivateKeyAccount = _
-  def richAccount: PrivateKeyAccount          = _richAccount
+  private var _richAccount: KeyPair = _
+  def richAccount: KeyPair          = _richAccount
 
   private var _lastBlock: Block = _
   def lastBlock: Block          = _lastBlock
 
-  protected def waves(n: Float): Long              = (n * 100000000L).toLong
-  protected val accountGen: Gen[PrivateKeyAccount] = Gen.containerOfN[Array, Byte](32, Arbitrary.arbitrary[Byte]).map(seed => PrivateKeyAccount(seed))
+  protected def waves(n: Float): Long = (n * 100000000L).toLong
+  protected val accountGen: Gen[KeyPair] =
+    Gen.containerOfN[Array, Byte](32, Arbitrary.arbitrary[Byte]).map(seed => KeyPair(seed))
 
   protected def updateFunctionalitySettings(base: FunctionalitySettings): FunctionalitySettings = base
 
-  protected def txGenP(sender: PrivateKeyAccount, ts: Long): Gen[Transaction]
+  protected def txGenP(sender: KeyPair, ts: Long): Gen[Transaction]
 
-  private def genBlock(base: Block, sender: PrivateKeyAccount): Gen[Block] =
+  private def genBlock(base: Block, sender: KeyPair): Gen[Block] =
     for {
       transferTxs <- Gen.sequence[Vector[Transaction], Transaction]((1 to TxsInBlock).map { i =>
-        txGenP(sender, base.timestamp + i)
+        txGenP(sender, base.header.timestamp + i)
       })
     } yield
       TestBlock.create(
         time = transferTxs.last.timestamp,
-        ref = base.uniqueId,
+        ref = base.id(),
         txs = transferTxs
       )
 
-  private val initGen: Gen[(PrivateKeyAccount, Block)] = for {
+  private val initGen: Gen[(KeyPair, Block)] = for {
     rich <- accountGen
   } yield {
     val genesisTx = GenesisTransaction.create(rich, waves(100000000L), System.currentTimeMillis() - 10000).explicitGet()
@@ -63,13 +68,13 @@ trait BaseState {
 
   protected def nextBlock(txs: Seq[Transaction]): Block = TestBlock.create(
     time = txs.last.timestamp,
-    ref = lastBlock.uniqueId,
+    ref = lastBlock.id(),
     txs = txs
   )
 
   private def append(prev: Option[Block], next: Block): Unit = {
-    val preconditionDiff = BlockDiffer.fromBlock(fsSettings, state, prev, next, MiningConstraint.Unlimited).explicitGet()._1
-    state.append(preconditionDiff, 0, next)
+    val preconditionDiff = BlockDiffer.fromBlock(state, prev, next, MiningConstraint.Unlimited).explicitGet().diff
+    state.append(preconditionDiff, 0, 0, None, next.header.generationSignature, next)
   }
 
   def applyBlock(b: Block): Unit = {

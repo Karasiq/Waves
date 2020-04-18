@@ -1,49 +1,76 @@
 package com.wavesplatform.lang.v1.traits.domain
 
-import scodec.bits.ByteVector
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.lang.v1.compiler.Terms.EVALUATED
+import com.wavesplatform.lang.v1.traits.domain.{Burn => BurnAction}
 
 case class TransferItem(recipient: Recipient, amount: Long)
 
 trait Tx
+sealed trait PseudoTx
 
 object Tx {
+  case class ScriptTransfer(assetId: Option[ByteStr],
+                            sender: Recipient.Address,
+                            senderPk: ByteStr,
+                            recipient: Recipient.Address,
+                            amount: Long,
+                            timestamp: Long,
+                            id: ByteStr) extends PseudoTx
 
-  case class Header(id: ByteVector, fee: Long, timestamp: Long, version: Long)
-  case class Proven(h: Header, sender: Recipient.Address, bodyBytes: ByteVector, senderPk: ByteVector, proofs: IndexedSeq[ByteVector])
+  case class ReissuePseudoTx(
+    reissue: Reissue,
+    sender: Recipient.Address,
+    senderPk: ByteStr,
+    txId: ByteStr,
+    timestamp: Long
+  ) extends PseudoTx
+
+  case class BurnPseudoTx(
+    burn: BurnAction,
+    sender: Recipient.Address,
+    senderPk: ByteStr,
+    txId: ByteStr,
+    timestamp: Long
+  ) extends PseudoTx
+
+  case class Header(id: ByteStr, fee: Long, timestamp: Long, version: Long)
+  case class Proven(h: Header, sender: Recipient.Address, bodyBytes: ByteStr, senderPk: ByteStr, proofs: IndexedSeq[ByteStr])
   case class TransferItem(recipient: Recipient, amount: Long)
+  case class Pmt(asset: Option[ByteStr], amount: Long)
 
   case class Genesis(header: Header, amount: Long, recipient: Recipient) extends Tx
   case class Payment(p: Proven, amount: Long, recipient: Recipient)      extends Tx
-  case class Transfer(p: Proven,
-                      feeAssetId: Option[ByteVector],
-                      assetId: Option[ByteVector],
-                      amount: Long,
-                      recipient: Recipient,
-                      attachment: ByteVector)
+  case class Transfer(p: Proven, feeAssetId: Option[ByteStr], assetId: Option[ByteStr], amount: Long, recipient: Recipient, attachment: TransferAttachment)
       extends Tx
-  case class Issue(p: Proven,
-                   quantity: Long,
-                   name: ByteVector,
-                   description: ByteVector,
-                   reissuable: Boolean,
-                   decimals: Long,
-                   script: Option[ByteVector])
+  case class Issue(p: Proven, quantity: Long, name: ByteStr, description: ByteStr, reissuable: Boolean, decimals: Long, script: Option[ByteStr])
       extends Tx
-  case class ReIssue(p: Proven, quantity: Long, assetId: ByteVector, reissuable: Boolean) extends Tx
-  case class Burn(p: Proven, quantity: Long, assetId: ByteVector)                         extends Tx
-  case class Lease(p: Proven, amount: Long, recipient: Recipient)                         extends Tx
-  case class LeaseCancel(p: Proven, leaseId: ByteVector)                                  extends Tx
-  case class CreateAlias(p: Proven, alias: String)                                        extends Tx
-  case class SetScript(p: Proven, script: Option[ByteVector])                             extends Tx
-  case class SetAssetScript(p: Proven, assetId: ByteVector, script: Option[ByteVector])   extends Tx
+  case class ReIssue(p: Proven, quantity: Long, assetId: ByteStr, reissuable: Boolean) extends Tx
+  case class Burn(p: Proven, quantity: Long, assetId: ByteStr)                         extends Tx
+
+  case class CI(
+                 p: Proven,
+                 dAppAddressOrAlias: Recipient,
+                 payments: AttachedPayments,
+                 feeAssetId: Option[ByteStr],
+                 funcName: Option[String],
+                 funcArgs: List[EVALUATED]
+  ) extends Tx
+
+  case class Lease(p: Proven, amount: Long, recipient: Recipient)                 extends Tx
+  case class LeaseCancel(p: Proven, leaseId: ByteStr)                             extends Tx
+  case class CreateAlias(p: Proven, alias: String)                                extends Tx
+  case class SetScript(p: Proven, script: Option[ByteStr])                        extends Tx
+  case class SetAssetScript(p: Proven, assetId: ByteStr, script: Option[ByteStr]) extends Tx
   case class MassTransfer(p: Proven,
-                          assetId: Option[ByteVector],
+                          assetId: Option[ByteStr],
                           transferCount: Long,
                           totalAmount: Long,
                           transfers: IndexedSeq[TransferItem],
-                          attachment: ByteVector)
+                          attachment: TransferAttachment)
       extends Tx
-  case class Sponsorship(p: Proven, assetId: ByteVector, minSponsoredAssetFee: Option[Long])                                          extends Tx
+  case class Sponsorship(p: Proven, assetId: ByteStr, minSponsoredAssetFee: Option[Long])                                             extends Tx
   case class Exchange(p: Proven, amount: Long, price: Long, buyMatcherFee: Long, sellMatcherFee: Long, buyOrder: Ord, sellOrder: Ord) extends Tx
   case class Data(p: Proven, data: IndexedSeq[DataItem[_]])                                                                           extends Tx
+  case class UpdateAssetInfo(p: Proven, assetId: ByteStr, name: String, description: String)                                          extends Tx
 }
