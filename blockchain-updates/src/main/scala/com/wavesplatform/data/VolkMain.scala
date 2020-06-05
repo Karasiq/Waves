@@ -2,8 +2,11 @@ package com.wavesplatform.data
 
 import java.time._
 
-import com.wavesplatform.account.{Address, AddressScheme}
+import com.wavesplatform.account.{Address, AddressScheme, PublicKey}
 import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils._
+import com.wavesplatform.consensus.FairPoSCalculator
+import com.wavesplatform.crypto
 import com.wavesplatform.events.protobuf.{BlockchainUpdated, StateUpdate}
 import com.wavesplatform.protobuf.block.PBBlocks
 import com.wavesplatform.protobuf.transaction.{PBSignedTransaction, PBTransactions, VanillaTransaction}
@@ -11,15 +14,18 @@ import com.wavesplatform.transaction.Asset.Waves
 import com.wavesplatform.transaction.lease.{LeaseCancelTransaction, LeaseTransaction}
 import com.wavesplatform.transaction.transfer.TransferTransaction
 import com.wavesplatform.transaction.{AuthorizedTransaction, Transaction}
-import com.wavesplatform.utils.ScorexLogging
+import com.wavesplatform.utils.{ScorexLogging, byteStrFormat}
+import okhttp3.{OkHttpClient, Request}
+import play.api.libs.json.{JsObject, JsValue, Json}
 
+import scala.concurrent.duration.{Duration => _, _}
 import scala.util.Try
 import scala.util.control.NonFatal
 
 object VolkMain extends App with ScorexLogging {
   def parseTransaction(tx: PBSignedTransaction): Option[VanillaTransaction] = Try(PBTransactions.vanillaUnsafe(tx)).toOption
 
-  def sendNotification(channel: String, height: Int, txId: ByteStr, typeStr: String, alarm: Boolean): Unit = {
+  def sendTxNotification(channel: String, txId: ByteStr, typeStr: String, alarm: Boolean): Unit = {
     val msg =
       s"""${if (alarm) "@everyone " else ""}**${typeStr.capitalize}**: https://wavesexplorer.com/tx/$txId""".stripMargin
     DiscordSender.sendMessage(channel, msg)
@@ -39,8 +45,48 @@ object VolkMain extends App with ScorexLogging {
   var rollbacksEnabled  = false
   val db                = new BalancesDB(nodeAddress, safeAddress)
 
+  lazy val httpClient = new OkHttpClient
+
+  def getNextDelay(): Int = {
+    val publicKey = PublicKey.fromBase58String(sys.env("VOLK_NODE_PK")).explicitGet()
+
+    def request(url: String): JsValue = {
+      val request = new Request.Builder().get().url(s"http://nodes.wavesnodes.com/$url").build()
+      val call    = httpClient.newCall(request)
+      val bytes   = call.execute().body().bytes()
+      Json.parse(bytes)
+    }
+
+    val balance    = (request(s"addresses/balance/details/${nodeAddress.stringRepr}") \ "generating").as[Long]
+    val lastBlock  = request("blocks/headers/last").as[JsObject]
+    val lastBT     = (lastBlock \ "nxt-consensus" \ "base-target").as[Long]
+    val lastGenSig = (lastBlock \ "nxt-consensus" \ "generation-signature").as[ByteStr]
+
+    def generationSignature(signature: Array[Byte], publicKey: PublicKey): Array[Byte] = {
+      val s = new Array[Byte](crypto.DigestLength * 2)
+      System.arraycopy(signature, 0, s, 0, crypto.DigestLength)
+      System.arraycopy(publicKey.arr, 0, s, crypto.DigestLength, crypto.DigestLength)
+      crypto.fastHash(s)
+    }
+
+    val genSig = generationSignature(lastGenSig.arr, publicKey)
+    val hit    = BigInt(1, genSig.take(8).reverse)
+    val delay  = FairPoSCalculator.calculateDelay(hit, lastBT, balance)
+    require(delay > 0)
+    delay.millis.toSeconds.toInt
+  }
+
+  def sendNextDelay(): Unit = {
+    val triedDelay = Try(getNextDelay())
+    triedDelay.failed.foreach(log.error("Error calculating delay", _))
+    triedDelay.foreach(seconds => channels.foreach(DiscordSender.sendMessage(_, s"Next allowed mining attempt in $seconds sec")))
+  }
+
   channels.foreach(DiscordSender.sendMessage(_, s"Node monitor started, last checked height is ${db.lastHeight}"))
+  sendNextDelay()
+
   val pa = new PollingAgent(if (db.lastHeight == 0) startHeight else 0)
+
   pa.start(_.foreach {
     case BlockchainUpdated(
         id,
@@ -63,12 +109,12 @@ object VolkMain extends App with ScorexLogging {
 
       def simpleNotify(tx: Transaction, typeStr: String): Unit = {
         log.info(s"Simple alert ($typeStr): $tx")
-        channels.foreach(ch => sendNotification(ch, height, tx.id(), typeStr, alarm = false))
+        channels.foreach(ch => sendTxNotification(ch, tx.id(), typeStr, alarm = false))
       }
 
       def alert(tx: Transaction, typeStr: String): Unit = {
         log.info(s"Alarm alert ($typeStr): $tx")
-        channels.foreach(ch => sendNotification(ch, height, tx.id(), typeStr, alarm = true))
+        channels.foreach(ch => sendTxNotification(ch, tx.id(), typeStr, alarm = true))
       }
 
       val isToday = {
@@ -112,13 +158,21 @@ object VolkMain extends App with ScorexLogging {
 
       if (isToday) {
         if (isNodeGenerated) {
+          if (lastMinedNotified > 0)
+            channels.foreach(
+              DiscordSender
+                .sendMessage(_, s"New block generated at ${Instant.ofEpochMilli(block.getHeader.timestamp).atZone(ZoneId.of("Europe/Moscow"))}")
+            )
+
           lastMined = Instant.now()
           lastMinedNotified = 0
         } else if (lastMined.plus(Duration.ofHours(4)).compareTo(Instant.now()) < 0 && lastMinedNotified < 2) {
           channels.foreach(DiscordSender.sendMessage(_, "@everyone **Warning**: Last block generated more than 4 hours ago"))
+          sendNextDelay()
           lastMinedNotified = 2
         } else if (lastMined.plus(Duration.ofHours(3)).compareTo(Instant.now()) < 0 && lastMinedNotified < 1) {
           channels.foreach(DiscordSender.sendMessage(_, "**Warning**: Last block generated more than 3 hours ago"))
+          sendNextDelay()
           lastMinedNotified = 1
         }
       }
