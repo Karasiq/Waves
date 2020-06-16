@@ -82,6 +82,62 @@ object VolkMain extends App with ScorexLogging {
     triedDelay.foreach(seconds => channels.foreach(DiscordSender.sendMessage(_, s"Next allowed mining attempt in $seconds sec")))
   }
 
+  class FaucetChecker(network: String, address: String) {
+    private[this] var nextNotification = LocalDate
+      .now()
+      .atTime(12, 0)
+      .atZone(ZoneId.of("Europe/Moscow"))
+
+    private[this] var lastFaucetCheck = 0L
+
+    def checkFaucetBalance(): Unit = {
+      val timeToNotify = Instant.now().compareTo(nextNotification.toInstant) > 0
+      val timeToCheck = {
+        val interval = 2 hours
+        val elapsed  = (System.nanoTime() - lastFaucetCheck).nanos
+        elapsed > interval
+      }
+
+      if (timeToNotify || timeToCheck) {
+        val request = new Request.Builder()
+          .get()
+          .url(s"http://nodes-${network.toLowerCase}.wavesnodes.com/addresses/balance/$address")
+          .header("Accept", "application/json")
+          .build()
+        val result  = Json.parse(httpClient.newCall(request).execute().body().bytes())
+        val balance = (result \ "balance").as[Long] * 1e-8
+
+        val message = f"Faucet balance on $network: $balance%.2f Waves"
+        log.info(message)
+
+        if (timeToNotify || balance < 5000) {
+          val faucetChannels = Seq("faucet_mon")
+          faucetChannels.foreach(DiscordSender.sendMessage(_, message))
+          if (timeToNotify) nextNotification = nextNotification.plusDays(1)
+        }
+
+        lastFaucetCheck = System.nanoTime()
+      }
+    }
+  }
+
+  val faucetThread = new Thread({ () =>
+    val checkers = Seq(
+      new FaucetChecker("Testnet", "3Myqjf1D44wR8Vko4Tr5CwSzRNo2Vg9S7u7"),
+      new FaucetChecker("Stagenet", "3MgSuT5FfeMrwwZCbztqLhQpcJNxySaFEiT")
+    )
+
+    while (!Thread.interrupted()) {
+      checkers.foreach { checker =>
+        Try(checker.checkFaucetBalance()).failed.foreach(log.error("Error checking faucet balance", _))
+      }
+      Thread.sleep(10000)
+    }
+  })
+
+  faucetThread.setDaemon(true)
+  // faucetThread.start()
+
   channels.foreach(DiscordSender.sendMessage(_, s"Node monitor started, last checked height is ${db.lastHeight}"))
   sendNextDelay()
 
