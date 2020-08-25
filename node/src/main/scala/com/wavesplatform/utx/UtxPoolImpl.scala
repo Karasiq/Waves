@@ -8,7 +8,7 @@ import cats.Monoid
 import cats.instances.long.catsKernelStdGroupForLong
 import cats.instances.map.catsKernelStdCommutativeMonoidForMap
 import cats.syntax.monoid._
-import com.wavesplatform.account.{Address, Alias}
+import com.wavesplatform.account.{Address, Alias, PublicKey}
 import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.consensus.TransactionsOrdering
 import com.wavesplatform.events.UtxEvent
@@ -43,6 +43,7 @@ import scala.annotation.tailrec
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 import scala.util.{Left, Right}
+import com.wavesplatform.common.utils.EitherExt2
 
 //noinspection ScalaStyle
 class UtxPoolImpl(
@@ -60,13 +61,21 @@ class UtxPoolImpl(
 
   import com.wavesplatform.utx.UtxPoolImpl._
 
+  private val ignoreExchangeSenderPkInPessimisticPortfolio =
+    utxSettings.ignoreExchangeSenderPkInPessimisticPortfolio.map(PublicKey.fromBase58String(_).explicitGet())
+
   // Context
   private[this] val cleanupScheduler: SchedulerService =
     Schedulers.singleThread("utx-pool-cleanup", executionModel = ExecutionModel.AlwaysAsyncExecution)
 
   // State
-  private[this] val transactions          = new ConcurrentHashMap[ByteStr, Transaction]()
-  private[this] val pessimisticPortfolios = new PessimisticPortfolios(spendableBalanceChanged, blockchain.transactionMeta(_).isDefined, blacklistedAddressAssets, getBadAssetsDiff) // TODO delete in the future
+  private[this] val transactions = new ConcurrentHashMap[ByteStr, Transaction]()
+  private[this] val pessimisticPortfolios = new PessimisticPortfolios(
+    spendableBalanceChanged,
+    blockchain.transactionMeta(_).isDefined,
+    blacklistedAddressAssets,
+    getBadAssetsDiff
+  ) // TODO delete in the future
 
   private[this] val priorityDiffs          = mutable.LinkedHashSet.empty[Diff]
   private[this] def priorityTransactionIds = priorityDiffs.synchronized(priorityDiffs.toVector.flatMap(_.transactions.keys))
@@ -184,7 +193,7 @@ class UtxPoolImpl(
   private[this] def removeFromOrdPool(txId: ByteStr): Unit = {
     for (tx <- Option(transactions.remove(txId))) {
       PoolMetrics.removeTransaction(tx)
-      pessimisticPortfolios.remove(txId)
+      validateForPessimistic(tx).foreach(_ => pessimisticPortfolios.remove(txId))
     }
   }
 
@@ -225,7 +234,7 @@ class UtxPoolImpl(
     }
 
     def addPortfolio(): Unit = diffEi.map { diff =>
-      pessimisticPortfolios.add(tx.id(), diff)
+      validateForPessimistic(tx).foreach(tx => pessimisticPortfolios.add(tx.id(), diff))
       onEvent(UtxEvent.TxAdded(tx, diff))
     }
 
@@ -572,6 +581,17 @@ class UtxPoolImpl(
     def removeTransactionPriority(tx: Transaction): Unit = {
       prioritySizeStats.decrement()
       priorityBytesStats.decrement(tx.bytes().length)
+    }
+  }
+
+  private def validateForPessimistic(tx: Transaction): Option[Transaction] = {
+    ignoreExchangeSenderPkInPessimisticPortfolio match {
+      case None => Some(tx)
+      case Some(ignorePk) =>
+        tx match {
+          case tx: ExchangeTransaction if tx.sender == ignorePk => None
+          case _                                                => Some(tx)
+        }
     }
   }
 }

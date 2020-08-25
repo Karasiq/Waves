@@ -1,18 +1,28 @@
 package com.wavesplatform.it.sync.debug
 
 import com.typesafe.config.Config
-import com.wavesplatform.it.{Node, NodeConfigs}
+import com.wavesplatform.account.{AddressScheme, KeyPair}
+import com.wavesplatform.common.utils.EitherExt2
+import com.wavesplatform.it.NodeConfigs.Default
 import com.wavesplatform.it.api.SyncHttpApi._
+import com.wavesplatform.it.sync._
 import com.wavesplatform.it.transactions.NodesFromDocker
 import com.wavesplatform.it.util._
-import com.wavesplatform.it.sync._
+import com.wavesplatform.it.{Node, NodeConfigs}
+import com.wavesplatform.transaction.{Asset, Proofs}
+import com.wavesplatform.transaction.Asset.Waves
+import com.wavesplatform.transaction.assets.exchange.{AssetPair, ExchangeTransaction, Order}
 import org.scalatest.FunSuite
 
 class DebugPortfoliosSuite extends FunSuite with NodesFromDocker {
+  private val matcherAccount = KeyPair.fromSeed(Default.head.getString("account-seed")).explicitGet()
+  private val unknownAccount = KeyPair.fromSeed(Default(1).getString("account-seed")).explicitGet()
+
   override protected def nodeConfigs: Seq[Config] =
     NodeConfigs.newBuilder
       .overrideBase(_.quorum(0))
-      .withDefault(entitiesNumber = 1)
+      .withDefault(0)
+      .withSpecial(_.raw(s"waves.utx.ignore-exchange-sender-pk-in-pessimistic-portfolio = ${matcherAccount.publicKey}"))
       .buildNonConflicting()
 
   private def sender: Node = nodes.head
@@ -23,10 +33,19 @@ class DebugPortfoliosSuite extends FunSuite with NodesFromDocker {
   private lazy val firstAddress: String  = firstAcc.toAddress.toString
   private lazy val secondAddress: String = secondAcc.toAddress.toString
 
+  private var assetId: Asset       = null
+  private var assetPair: AssetPair = null
+
   override protected def beforeAll(): Unit = {
     super.beforeAll()
+
+    val rawAssetId = Some(sender.issue(sender.keyPair, decimals = 2, waitForTx = true).id)
+    assetId = Asset.fromString(rawAssetId)
+    assetPair = AssetPair(assetId, Waves)
+
     sender.transfer(sender.keyPair, firstAddress, 20.waves, minFee, waitForTx = true)
     sender.transfer(sender.keyPair, secondAddress, 20.waves, minFee, waitForTx = true)
+    sender.transfer(sender.keyPair, secondAddress, 200000, minFee, assetId = rawAssetId, waitForTx = true)
   }
 
   test("getting a balance considering pessimistic transactions from UTX pool - changed after UTX") {
@@ -42,7 +61,6 @@ class DebugPortfoliosSuite extends FunSuite with NodesFromDocker {
 
     val expectedBalance = portfolioBefore.balance - 10.waves // withdraw + fee
     assert(portfolioAfter.balance == expectedBalance)
-
   }
 
   test("getting a balance without pessimistic transactions from UTX pool - not changed after UTX") {
@@ -56,5 +74,128 @@ class DebugPortfoliosSuite extends FunSuite with NodesFromDocker {
 
     val portfolioAfter = sender.debugPortfoliosFor(firstAddress, considerUnspent = false)
     assert(portfolioAfter.balance == portfolioBefore.balance)
+  }
+
+  test("getting a balance considering pessimistic transactions from UTX pool - not changed after Exchange with known sender") {
+    nodes.waitForHeightArise()
+
+    val portfolioBefore = sender.debugPortfoliosFor(firstAddress, considerUnspent = false).balance
+    val utxSizeBefore   = sender.utxSize
+
+    val amount = 20000L
+    val price  = 10000000L
+
+    val buy = Order.buy(
+      Order.V3,
+      firstAcc,
+      matcherAccount.publicKey,
+      assetPair,
+      amount,
+      price,
+      System.currentTimeMillis(),
+      System.currentTimeMillis() + 100000,
+      matcherFee
+    )
+
+    val sell = Order.sell(
+      Order.V3,
+      secondAcc,
+      matcherAccount.publicKey,
+      assetPair,
+      amount,
+      price,
+      System.currentTimeMillis(),
+      System.currentTimeMillis() + 100000,
+      matcherFee
+    )
+
+    sender.broadcastExchange(
+      matcher = matcherAccount,
+      order1 = buy,
+      order2 = sell,
+      amount = amount,
+      price = price,
+      buyMatcherFee = matcherFee,
+      sellMatcherFee = matcherFee,
+      fee = matcherFee
+    )
+
+    sender.waitForUtxIncreased(utxSizeBefore)
+
+    val portfolioAfterNotConsideringUnspent = sender.debugPortfoliosFor(firstAddress, considerUnspent = false).balance
+    val portfolioAfterConsideringUnspent    = sender.debugPortfoliosFor(firstAddress, considerUnspent = true).balance
+
+    withClue("not considering unspent") {
+      assert(portfolioAfterNotConsideringUnspent == portfolioBefore)
+    }
+
+    withClue("considering unspent") {
+      assert(portfolioAfterConsideringUnspent == portfolioBefore)
+    }
+  }
+
+  test("getting a balance considering pessimistic transactions from UTX pool - changed after Exchange with unknown sender") {
+    nodes.waitForHeightArise()
+
+    val portfolioBefore = sender.debugPortfoliosFor(firstAddress, considerUnspent = false).balance
+    val utxSizeBefore   = sender.utxSize
+
+    val amount = 20000L
+    val price  = 10000000L
+
+    val buy = Order.buy(
+      Order.V3,
+      firstAcc,
+      unknownAccount.publicKey,
+      assetPair,
+      amount,
+      price,
+      System.currentTimeMillis(),
+      System.currentTimeMillis() + 100000,
+      matcherFee
+    )
+
+    val firstAccSpending = amount * price / Order.PriceConstant + matcherFee
+
+    val sell = Order.sell(
+      Order.V3,
+      secondAcc,
+      unknownAccount.publicKey,
+      assetPair,
+      amount,
+      price,
+      System.currentTimeMillis(),
+      System.currentTimeMillis() + 100000,
+      matcherFee
+    )
+
+    val tx = ExchangeTransaction
+      .signed(
+        version = 2.toByte,
+        matcher = unknownAccount.privateKey,
+        order1 = buy,
+        order2 = sell,
+        amount = amount,
+        price = price,
+        buyMatcherFee = matcherFee,
+        sellMatcherFee = matcherFee,
+        fee = matcherFee,
+        timestamp = System.currentTimeMillis()
+      )
+      .explicitGet()
+
+    sender.signedBroadcast(tx.json())
+    sender.waitForUtxIncreased(utxSizeBefore)
+
+    val portfolioAfterNotConsideringUnspent = sender.debugPortfoliosFor(firstAddress, considerUnspent = false).balance
+    val portfolioAfterConsideringUnspent    = sender.debugPortfoliosFor(firstAddress, considerUnspent = true).balance
+
+    withClue("not considering unspent") {
+      assert(portfolioAfterNotConsideringUnspent == portfolioBefore)
+    }
+
+    withClue("considering unspent") {
+      assert(portfolioAfterConsideringUnspent == portfolioBefore - firstAccSpending)
+    }
   }
 }
