@@ -38,6 +38,7 @@ object VolkMain extends App with ScorexLogging {
   }
   val nodeAddress: Address = Address.fromString(sys.env("VOLK_NODE")).right.get
   val safeAddress: Address = Address.fromString(sys.env("VOLK_SAFE")).right.get
+  val initialBalance: Long = (sys.env.getOrElse("VOLK_BALANCE", "0").toDouble * 1e8).toLong
 
   val aggr              = new MicroBlockAggregator
   var lastMined         = Instant.now()
@@ -71,7 +72,7 @@ object VolkMain extends App with ScorexLogging {
 
     val genSig = generationSignature(lastGenSig.arr, publicKey)
     val hit    = BigInt(1, genSig.take(8).reverse)
-    val delay  = FairPoSCalculator.calculateDelay(hit, lastBT, balance)
+    val delay  = FairPoSCalculator.V1.calculateDelay(hit, lastBT, balance)
     require(delay > 0)
     delay.millis.toSeconds.toInt
   }
@@ -136,7 +137,7 @@ object VolkMain extends App with ScorexLogging {
   })
 
   faucetThread.setDaemon(true)
-  // faucetThread.start()
+  faucetThread.start()
 
   channels.foreach(DiscordSender.sendMessage(_, s"Node monitor started, last checked height is ${db.lastHeight}"))
   sendNextDelay()
@@ -150,7 +151,7 @@ object VolkMain extends App with ScorexLogging {
         BlockchainUpdated.Update
           .Append(BlockchainUpdated.Append(_, Some(stateUpdate), txUpdates, BlockchainUpdated.Append.Body.MicroBlock(microBlock)))
         ) if height > startHeight =>
-      aggr.addMicroBlock(height, id, stateUpdate, txUpdates, microBlock.getMicroBlock.transactions)
+      aggr.addMicroBlock(height, id, stateUpdate, txUpdates.toVector, microBlock.getMicroBlock.getMicroBlock.transactions)
 
     case BlockchainUpdated(
         id,
@@ -161,7 +162,7 @@ object VolkMain extends App with ScorexLogging {
       rollbacksEnabled = true // Arrived to the correct offset
       val height                  = nextHeight - 1
       val stateUpdate             = stateUpdateOpt.getOrElse(StateUpdate.defaultInstance)
-      val (updates, transactions) = aggr.finishBlock(nextHeight, id, stateUpdate, txUpdates, block.transactions)
+      val (updates, transactions) = aggr.finishBlock(nextHeight, id, stateUpdate, txUpdates.toVector, block.getBlock.transactions)
 
       def simpleNotify(tx: Transaction, typeStr: String): Unit = {
         log.info(s"Simple alert ($typeStr): $tx")
@@ -175,7 +176,7 @@ object VolkMain extends App with ScorexLogging {
 
       val isToday = {
         val today = LocalDate.now(ZoneId.of("UTC"))
-        val ts    = LocalDateTime.ofInstant(Instant.ofEpochMilli(block.getHeader.timestamp), ZoneId.of("UTC")).toLocalDate
+        val ts    = LocalDateTime.ofInstant(Instant.ofEpochMilli(block.getBlock.getHeader.timestamp), ZoneId.of("UTC")).toLocalDate
         today.compareTo(ts) == 0
       }
 
@@ -208,7 +209,7 @@ object VolkMain extends App with ScorexLogging {
       }
       if (newLeases.nonEmpty || cancelled.nonEmpty) db.addLeases(newLeases, cancelled)
 
-      val isNodeGenerated = PBBlocks.vanilla(block.getHeader).generator.toAddress == nodeAddress
+      val isNodeGenerated = PBBlocks.vanilla(block.getBlock.getHeader).generator.toAddress == nodeAddress
       // log.info(s"New block: $height, generated $isNodeGenerated")
       val rewards = db.saveBalances(height, updates, transactions.flatMap(parseTransaction))
 
@@ -217,17 +218,20 @@ object VolkMain extends App with ScorexLogging {
           if (lastMinedNotified > 0)
             channels.foreach(
               DiscordSender
-                .sendMessage(_, s"New block generated at ${Instant.ofEpochMilli(block.getHeader.timestamp).atZone(ZoneId.of("Europe/Moscow"))}")
+                .sendMessage(
+                  _,
+                  s"New block generated at ${Instant.ofEpochMilli(block.getBlock.getHeader.timestamp).atZone(ZoneId.of("Europe/Moscow"))}"
+                )
             )
 
           lastMined = Instant.now()
           lastMinedNotified = 0
-        } else if (lastMined.plus(Duration.ofHours(4)).compareTo(Instant.now()) < 0 && lastMinedNotified < 2) {
-          channels.foreach(DiscordSender.sendMessage(_, "@everyone **Warning**: Last block generated more than 4 hours ago"))
+        } else if (lastMined.plus(Duration.ofHours(5)).compareTo(Instant.now()) < 0 && lastMinedNotified < 2) {
+          channels.foreach(DiscordSender.sendMessage(_, "@everyone **Warning**: Last block generated more than 5 hours ago"))
           sendNextDelay()
           lastMinedNotified = 2
-        } else if (lastMined.plus(Duration.ofHours(3)).compareTo(Instant.now()) < 0 && lastMinedNotified < 1) {
-          channels.foreach(DiscordSender.sendMessage(_, "**Warning**: Last block generated more than 3 hours ago"))
+        } else if (lastMined.plus(Duration.ofHours(4)).compareTo(Instant.now()) < 0 && lastMinedNotified < 1) {
+          channels.foreach(DiscordSender.sendMessage(_, "**Warning**: Last block generated more than 4 hours ago"))
           sendNextDelay()
           lastMinedNotified = 1
         }
@@ -237,7 +241,7 @@ object VolkMain extends App with ScorexLogging {
       Stats.publish(channels)
 
     case e @ BlockchainUpdated(_, height, BlockchainUpdated.Update.Rollback(rollback))
-        if rollback.isBlock && db.lastHeight >= height && rollbacksEnabled =>
+        if rollback.`type`.isBlock && db.lastHeight >= height && rollbacksEnabled =>
       if (height < db.lastHeight - 100) log.warn(s"Rollback to $height: $e")
       if (height < db.lastHeight - 10000) {
         channels.foreach(DiscordSender.sendMessage(_, s"Unable to rollback to $height, stopping"))
@@ -246,11 +250,11 @@ object VolkMain extends App with ScorexLogging {
       db.rollback(height)
       aggr.rollback(height, aggr.keyBlockId)
 
-    case BlockchainUpdated(id, height, BlockchainUpdated.Update.Rollback(rollback)) if rollback.isMicroblock && height > startHeight =>
+    case BlockchainUpdated(id, height, BlockchainUpdated.Update.Rollback(rollback)) if rollback.`type`.isMicroblock && height > startHeight =>
       // log.info(s"Rollback to ${ByteStr(id.toByteArray)}")
       aggr.rollback(height, id)
 
-    case e => // log.warn(s"Event ignored at ${e.height}: ${e.id} ${e.update.getClass.toString}")
+    case e => log.warn(s"Event ignored at ${e.height}: ${e.id} ${e.update.getClass.toString}")
   })
 
   object Stats {
@@ -260,7 +264,7 @@ object VolkMain extends App with ScorexLogging {
 
     def update(rewards: Long): Unit = {
       this.balance += rewards
-      log.info(s"Today rewards is ${balance.toDouble / 100000000} waves")
+      log.info(s"Today rewards is ${balance / 1e8} waves")
     }
 
     def publish(channels: Seq[String]): Unit = {
@@ -278,8 +282,8 @@ object VolkMain extends App with ScorexLogging {
     def sendStats(channel: String): Unit = {
       val msg =
         s"""**Daily stats**
-           |Daily profit: ${balance.toDouble / 100000000} waves
-           |Total profit: ${db.totalProfit.toDouble / 100000000} waves""".stripMargin
+           |Daily profit: ${balance / 1e8} waves
+           |Total profit: ${(db.totalProfit + initialBalance) / 1e8} waves""".stripMargin
 
       DiscordSender.sendMessage(channel, msg)
     }

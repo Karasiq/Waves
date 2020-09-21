@@ -190,7 +190,7 @@ object Keys {
     Key(VolkLeases, Array.emptyByteArray, bytes => bytes.grouped(32).map(ByteStr(_)).toSet, leases => leases.foldLeft(ByteStr.empty)(_ ++ _).arr)
 
   def volkBalance(address: Address, height: Int): Key[Long] =
-    Key(VolkBalance, address.bytes ++ ByteStr(Ints.toByteArray(height)), Longs.fromByteArray, Longs.toByteArray)
+    Key(VolkBalance, address.bytes ++ Ints.toByteArray(height), Longs.fromByteArray, Longs.toByteArray)
 
   def volkBalanceHistory(address: Address): Key[Seq[Int]] =
     historyKey(VolkBalanceHistory, address.bytes)
