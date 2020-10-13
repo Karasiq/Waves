@@ -3,9 +3,8 @@ import WavesDockerKeys._
 name := "blockchain-updates"
 
 libraryDependencies ++= Seq(
-  "net.dv8tion" % "JDA" % "4.1.1_125",
-  Dependencies.grpc
-)
+  "net.dv8tion" % "JDA" % "4.1.1_125"
+) ++ Dependencies.grpc
 
 resolvers += Resolver.jcenterRepo
 

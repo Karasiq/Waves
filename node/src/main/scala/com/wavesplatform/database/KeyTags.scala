@@ -21,8 +21,8 @@ object KeyTags extends Enumeration {
   FilledVolumeAndFeeHistory,
   FilledVolumeAndFee,
   ChangedAddresses,
-  //ChangedAssetBalances,
-  //ChangedDataKeys,
+  ChangedAssetBalances,
+  ChangedDataKeys,
   AddressIdOfAlias,
   LastAddressId,
   AddressId,
@@ -31,8 +31,6 @@ object KeyTags extends Enumeration {
   AddressScript,
   ApprovedFeatures,
   ActivatedFeatures,
-  DataKeyChunkCount, // Removed
-  DataKeyChunk, // Removed
   DataHistory,
   Data,
   SponsorshipHistory,
@@ -41,7 +39,6 @@ object KeyTags extends Enumeration {
   AssetScriptHistory,
   AssetScript,
   SafeRollbackHeight,
-  ChangedDataKeys, // Removed
   BlockInfoAtHeight,
   NthTransactionInfoAtHeight,
   AddressTransactionSeqNr,
@@ -56,17 +53,18 @@ object KeyTags extends Enumeration {
   AssetStaticInfo,
   NftCount,
   NftPossession,
-  VolkHeight,
-  VolkRewards,
-  VolkTotal,
-  VolkLeases,
-  VolkBalance,
-  VolkBalanceHistory,
   BloomFilterChecksum,
   IssuedAssets,
   UpdatedAssets,
   SponsoredAssets,
   StateHash = Value
+
+  val VolkHeight = Value(6000)
+  val VolkRewards = Value(6001)
+  val VolkTotal = Value(6002)
+  val VolkLeases = Value(6003)
+  val VolkBalance = Value(6004)
+  val VolkBalanceHistory = Value(6005)
 
   final implicit class KeyTagExt(val t: KeyTag) extends AnyVal {
     @inline def prefixBytes: Array[Byte] = Shorts.toByteArray(t.id.toShort)
