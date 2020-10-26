@@ -191,11 +191,11 @@ object VolkMain extends App with ScorexLogging {
 
           lastMined = Instant.now()
           lastMinedNotified = 0
-        } else if (lastMined.plus(Duration.ofHours(5)).compareTo(Instant.now()) < 0 && lastMinedNotified < 2) {
-          channels.foreach(DiscordSender.sendMessage(_, "@everyone **Warning**: Last block generated more than 5 hours ago"))
+        } else if (lastMined.plus(Duration.ofHours(7)).compareTo(Instant.now()) < 0 && lastMinedNotified < 2) {
+          channels.foreach(DiscordSender.sendMessage(_, "@everyone **Warning**: Last block generated more than 7 hours ago"))
           lastMinedNotified = 2
-        } else if (lastMined.plus(Duration.ofHours(4)).compareTo(Instant.now()) < 0 && lastMinedNotified < 1) {
-          channels.foreach(DiscordSender.sendMessage(_, "**Warning**: Last block generated more than 4 hours ago"))
+        } else if (lastMined.plus(Duration.ofHours(6)).compareTo(Instant.now()) < 0 && lastMinedNotified < 1) {
+          channels.foreach(DiscordSender.sendMessage(_, "**Warning**: Last block generated more than 6 hours ago"))
           lastMinedNotified = 1
         }
       }
