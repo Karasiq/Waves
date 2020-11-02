@@ -17,9 +17,9 @@ final case class BurnTransaction(
     version: TxVersion,
     sender: PublicKey,
     asset: IssuedAsset,
-    quantity: Long,
-    fee: Long,
-    timestamp: Long,
+    quantity: TxAmount,
+    fee: TxAmount,
+    timestamp: TxTimestamp,
     proofs: Proofs,
     chainId: Byte
 ) extends ProvenTransaction
@@ -85,6 +85,6 @@ object BurnTransaction extends TransactionParser {
       fee: Long,
       timestamp: Long
   ): Either[ValidationError, BurnTransaction] = {
-    signed(version, sender, asset, quantity, fee, timestamp, sender)
+    signed(version, sender.publicKey, asset, quantity, fee, timestamp, sender.privateKey)
   }
 }

@@ -28,9 +28,9 @@ object DataTxSerializer {
       case TxVersion.V1 =>
         Bytes.concat(
           Array(builder.typeId, version),
-          sender,
+          sender.arr,
           Shorts.toByteArray(data.size.toShort),
-          Bytes.concat(data.view.map(serializeEntry): _*),
+          Bytes.concat(data.map(serializeEntry): _*),
           Longs.toByteArray(timestamp),
           Longs.toByteArray(fee)
         )

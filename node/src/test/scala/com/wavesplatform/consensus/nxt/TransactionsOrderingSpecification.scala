@@ -13,78 +13,74 @@ import scala.util.Random
 
 class TransactionsOrderingSpecification extends PropSpec with Assertions with Matchers {
 
+  private val kp: KeyPair = KeyPair(ByteStr(new Array[Byte](32)))
   property("TransactionsOrdering.InBlock should sort correctly") {
     val correctSeq = Seq(
       TransferTransaction
         .selfSigned(
           1.toByte,
-          KeyPair(Array.fill(32)(0: Byte)),
+          kp,
           Address.fromString("3MydsP4UeQdGwBq7yDbMvf9MzfB2pxFoUKU").explicitGet(),
           Waves,
           100000,
           Waves,
           125L,
-          None,
+          ByteStr.empty,
           1
         )
-        .right
-        .get,
+        .explicitGet(),
       TransferTransaction
         .selfSigned(
           1.toByte,
-          KeyPair(Array.fill(32)(0: Byte)),
+          kp,
           Address.fromString("3MydsP4UeQdGwBq7yDbMvf9MzfB2pxFoUKU").explicitGet(),
           Waves,
           100000,
           Waves,
           124L,
-          None,
+          ByteStr.empty,
           2
         )
-        .right
-        .get,
+        .explicitGet(),
       TransferTransaction
         .selfSigned(
           1.toByte,
-          KeyPair(Array.fill(32)(0: Byte)),
+          kp,
           Address.fromString("3MydsP4UeQdGwBq7yDbMvf9MzfB2pxFoUKU").explicitGet(),
           Waves,
           100000,
           Waves,
           124L,
-          None,
+          ByteStr.empty,
           1
         )
-        .right
-        .get,
+        .explicitGet(),
       TransferTransaction
         .selfSigned(
           1.toByte,
-          KeyPair(Array.fill(32)(0: Byte)),
+          kp,
           Address.fromString("3MydsP4UeQdGwBq7yDbMvf9MzfB2pxFoUKU").explicitGet(),
           Waves,
           100000,
           Asset.fromCompatId(Some(ByteStr.empty)),
           124L,
-          None,
+          ByteStr.empty,
           2
         )
-        .right
-        .get,
+        .explicitGet(),
       TransferTransaction
         .selfSigned(
           1.toByte,
-          KeyPair(Array.fill(32)(0: Byte)),
+          kp,
           Address.fromString("3MydsP4UeQdGwBq7yDbMvf9MzfB2pxFoUKU").explicitGet(),
           Waves,
           100000,
           Asset.fromCompatId(Some(ByteStr.empty)),
           124L,
-          None,
+          ByteStr.empty,
           1
         )
-        .right
-        .get
+        .explicitGet()
     )
 
     val sorted = Random.shuffle(correctSeq).sorted(TransactionsOrdering.InBlock)
@@ -97,76 +93,71 @@ class TransactionsOrderingSpecification extends PropSpec with Assertions with Ma
       TransferTransaction
         .selfSigned(
           1.toByte,
-          KeyPair(Array.fill(32)(0: Byte)),
+          kp,
           Address.fromString("3MydsP4UeQdGwBq7yDbMvf9MzfB2pxFoUKU").explicitGet(),
           Waves,
           100000,
           Waves,
           124L,
-          None,
+          ByteStr.empty,
           1
         )
-        .right
-        .get,
+        .explicitGet(),
       TransferTransaction
         .selfSigned(
           1.toByte,
-          KeyPair(Array.fill(32)(0: Byte)),
+          kp,
           Address.fromString("3MydsP4UeQdGwBq7yDbMvf9MzfB2pxFoUKU").explicitGet(),
           Waves,
           100000,
           Waves,
           123L,
-          None,
+          ByteStr.empty,
           1
         )
-        .right
-        .get,
+        .explicitGet(),
       TransferTransaction
         .selfSigned(
           1.toByte,
-          KeyPair(Array.fill(32)(0: Byte)),
+          kp,
           Address.fromString("3MydsP4UeQdGwBq7yDbMvf9MzfB2pxFoUKU").explicitGet(),
           Waves,
           100000,
           Waves,
           123L,
-          None,
+          ByteStr.empty,
           2
         )
-        .right
-        .get,
+        .explicitGet(),
       TransferTransaction
         .selfSigned(
           1.toByte,
-          KeyPair(Array.fill(32)(0: Byte)),
+          kp,
           Address.fromString("3MydsP4UeQdGwBq7yDbMvf9MzfB2pxFoUKU").explicitGet(),
           Waves,
           100000,
           Asset.fromCompatId(Some(ByteStr.empty)),
           124L,
-          None,
+          ByteStr.empty,
           1
         )
-        .right
-        .get,
+        .explicitGet(),
       TransferTransaction
         .selfSigned(
           1.toByte,
-          KeyPair(Array.fill(32)(0: Byte)),
+          kp,
           Address.fromString("3MydsP4UeQdGwBq7yDbMvf9MzfB2pxFoUKU").explicitGet(),
           Waves,
           100000,
           Asset.fromCompatId(Some(ByteStr.empty)),
           124L,
-          None,
+          ByteStr.empty,
           2
         )
-        .right
-        .get
+        .explicitGet()
     )
 
-    val sorted = Random.shuffle(correctSeq).sorted(TransactionsOrdering.InUTXPool)
+    val sorted = Random.shuffle(correctSeq).sorted(TransactionsOrdering.InUTXPool(Set.empty))
 
     sorted shouldBe correctSeq
   }
@@ -176,52 +167,50 @@ class TransactionsOrderingSpecification extends PropSpec with Assertions with Ma
       TransferTransaction
         .selfSigned(
           1.toByte,
-          KeyPair(Array.fill(32)(0: Byte)),
+          kp,
           Address.fromString("3MydsP4UeQdGwBq7yDbMvf9MzfB2pxFoUKU").explicitGet(),
           Waves,
           100000,
           Waves,
           1,
-          None,
+          ByteStr.empty,
           124L
         )
-        .right
-        .get,
+        .explicitGet(),
       TransferTransaction
         .selfSigned(
           1.toByte,
-          KeyPair(Array.fill(32)(0: Byte)),
+          kp,
           Address.fromString("3MydsP4UeQdGwBq7yDbMvf9MzfB2pxFoUKU").explicitGet(),
           Waves,
           100000,
           Waves,
           1,
-          None,
+          ByteStr.empty,
           123L
         )
-        .right
-        .get
+        .explicitGet()
     )
 
     Random.shuffle(correctSeq).sorted(TransactionsOrdering.InBlock) shouldBe correctSeq
   }
 
-  property("TransactionsOrdering.InUTXPool should sort txs by ascending block timestamp") {
+  property("TransactionsOrdering.InUTXPool should sort txs by ascending block timestamp taking into consideration whitelisted senders") {
+    val whitelisted = KeyPair(Array.fill(32)(1: Byte))
     val correctSeq = Seq(
       TransferTransaction
         .selfSigned(
           1.toByte,
-          KeyPair(Array.fill(32)(0: Byte)),
+          whitelisted,
           Address.fromString("3MydsP4UeQdGwBq7yDbMvf9MzfB2pxFoUKU").explicitGet(),
           Waves,
           100000,
           Waves,
-          1,
-          None,
+          2,
+          ByteStr.empty,
           123L
         )
-        .right
-        .get,
+        .explicitGet(),
       TransferTransaction
         .selfSigned(
           1.toByte,
@@ -230,13 +219,12 @@ class TransactionsOrderingSpecification extends PropSpec with Assertions with Ma
           Waves,
           100000,
           Waves,
-          1,
-          None,
+          2,
+          ByteStr.empty,
           124L
         )
-        .right
-        .get
+        .explicitGet()
     )
-    Random.shuffle(correctSeq).sorted(TransactionsOrdering.InUTXPool) shouldBe correctSeq
+    Random.shuffle(correctSeq).sorted(TransactionsOrdering.InUTXPool(Set(whitelisted.toAddress.stringRepr))) shouldBe correctSeq
   }
 }

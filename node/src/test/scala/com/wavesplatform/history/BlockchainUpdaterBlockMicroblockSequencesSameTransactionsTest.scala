@@ -8,7 +8,7 @@ import com.wavesplatform.history.Domain.BlockchainUpdaterExt
 import com.wavesplatform.state.diffs._
 import com.wavesplatform.transaction._
 import com.wavesplatform.transaction.transfer._
-import com.wavesplatform.{NoShrink, TransactionGen}
+import com.wavesplatform.{EitherMatchers, NoShrink, TransactionGen}
 import org.scalacheck.Gen
 import org.scalatest._
 import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
@@ -18,6 +18,7 @@ class BlockchainUpdaterBlockMicroblockSequencesSameTransactionsTest
     with PropertyChecks
     with DomainScenarioDrivenPropertyCheck
     with Matchers
+    with EitherMatchers
     with TransactionGen
     with NoShrink {
 
@@ -31,11 +32,11 @@ class BlockchainUpdaterBlockMicroblockSequencesSameTransactionsTest
         val finalMinerBalances = rest.map {
           case (bmb: BlockAndMicroblockSequence, last: Block) =>
             withDomain(MicroblocksActivatedAt0WavesSettings) { d =>
-              d.blockchainUpdater.processBlock(gen).explicitGet()
+              d.blockchainUpdater.processBlock(gen) should beRight
               bmb.foreach {
                 case (b, mbs) =>
-                  d.blockchainUpdater.processBlock(b).explicitGet()
-                  mbs.foreach(mb => d.blockchainUpdater.processMicroBlock(mb).explicitGet())
+                  d.blockchainUpdater.processBlock(b) should beRight
+                  mbs.foreach(mb => d.blockchainUpdater.processMicroBlock(mb) should beRight)
               }
               d.blockchainUpdater.processBlock(last)
               d.balance(last.header.generator.toAddress)
@@ -52,20 +53,20 @@ class BlockchainUpdaterBlockMicroblockSequencesSameTransactionsTest
       ts     <- positiveIntGen
       fee    <- smallFeeGen
       amt    <- smallFeeGen
-      genesis: GenesisTransaction  = GenesisTransaction.create(master, ENOUGH_AMT, ts).explicitGet()
-      payment: TransferTransaction = createWavesTransfer(master, master, amt, fee, ts).explicitGet()
+      genesis: GenesisTransaction  = GenesisTransaction.create(master.toAddress, ENOUGH_AMT, ts).explicitGet()
+      payment: TransferTransaction = createWavesTransfer(master, master.toAddress, amt, fee, ts).explicitGet()
     } yield (miner, genesis, payment, ts)
     scenario(preconditionsAndPayments, MicroblocksActivatedAt0WavesSettings) {
       case (domain, (miner, genesis, payment, ts)) =>
         val genBlock       = buildBlockOfTxs(randomSig, Seq(genesis))
         val (base, micros) = chainBaseAndMicro(genBlock.id(), Seq.empty, Seq(Seq(payment)), miner, 3, ts)
         val emptyBlock     = customBuildBlockOfTxs(micros.last.totalResBlockSig, Seq.empty, miner, 3, ts)
-        domain.blockchainUpdater.processBlock(genBlock).explicitGet()
-        domain.blockchainUpdater.processBlock(base).explicitGet()
-        domain.blockchainUpdater.processMicroBlock(micros.head).explicitGet()
-        domain.blockchainUpdater.processBlock(emptyBlock).explicitGet()
+        domain.blockchainUpdater.processBlock(genBlock) should beRight
+        domain.blockchainUpdater.processBlock(base) should beRight
+        domain.blockchainUpdater.processMicroBlock(micros.head) should beRight
+        domain.blockchainUpdater.processBlock(emptyBlock) should beRight
 
-        domain.balance(miner) shouldBe payment.fee
+        domain.balance(miner.toAddress) shouldBe payment.fee
         domain.balance(genesis.recipient) shouldBe (genesis.amount - payment.fee)
     }
   }
@@ -80,9 +81,9 @@ class BlockchainUpdaterBlockMicroblockSequencesSameTransactionsTest
         ts     <- positiveIntGen
         fee    <- smallFeeGen
         amt    <- smallFeeGen
-        genesis: GenesisTransaction = GenesisTransaction.create(master, ENOUGH_AMT, ts).explicitGet()
+        genesis: GenesisTransaction = GenesisTransaction.create(master.toAddress, ENOUGH_AMT, ts).explicitGet()
         microBlockTxs = (1 to txCount * microBlockCount)
-          .map(step => createWavesTransfer(master, master, amt, fee, ts + step).explicitGet())
+          .map(step => createWavesTransfer(master, master.toAddress, amt, fee, ts + step).explicitGet())
           .grouped(microBlockCount)
           .toSeq
       } yield (miner, genesis, microBlockTxs, ts)
@@ -91,10 +92,10 @@ class BlockchainUpdaterBlockMicroblockSequencesSameTransactionsTest
         val genBlock       = buildBlockOfTxs(randomSig, Seq(genesis))
         val (base, micros) = chainBaseAndMicro(genBlock.id(), Seq.empty, microBlockTxs, miner, 3, ts)
         val emptyBlock     = customBuildBlockOfTxs(micros.last.totalResBlockSig, Seq.empty, miner, 3, ts)
-        domain.blockchainUpdater.processBlock(genBlock).explicitGet()
-        domain.blockchainUpdater.processBlock(base).explicitGet()
-        micros.foreach(domain.blockchainUpdater.processMicroBlock(_).explicitGet())
-        domain.blockchainUpdater.processBlock(emptyBlock).explicitGet()
+        domain.blockchainUpdater.processBlock(genBlock) should beRight
+        domain.blockchainUpdater.processBlock(base) should beRight
+        micros.foreach(domain.blockchainUpdater.processMicroBlock(_) should beRight)
+        domain.blockchainUpdater.processBlock(emptyBlock) should beRight
 
         domain.levelDBWriter.lastBlock.get.transactionData shouldBe microBlockTxs.flatten
     }
@@ -106,7 +107,7 @@ class BlockchainUpdaterBlockMicroblockSequencesSameTransactionsTest
       to   <- Gen.oneOf(accs)
       fee  <- smallFeeGen
       amt  <- smallFeeGen
-    } yield createWavesTransfer(from, to, amt, fee, ts).explicitGet()
+    } yield createWavesTransfer(from, to.toAddress, amt, fee, ts).explicitGet()
 
   def randomPayments(accs: Seq[KeyPair], ts: Long, amt: Int): Gen[Seq[TransferTransaction]] =
     if (amt == 0)
@@ -127,10 +128,10 @@ class BlockchainUpdaterBlockMicroblockSequencesSameTransactionsTest
       dave    <- accountGen
       miner   <- accountGen
       ts      <- positiveIntGen
-      genesis1: GenesisTransaction = GenesisTransaction.create(alice, TOTAL_WAVES / 4, ts).explicitGet()
-      genesis2: GenesisTransaction = GenesisTransaction.create(bob, TOTAL_WAVES / 4, ts + 1).explicitGet()
-      genesis3: GenesisTransaction = GenesisTransaction.create(charlie, TOTAL_WAVES / 4, ts + 2).explicitGet()
-      genesis4: GenesisTransaction = GenesisTransaction.create(dave, TOTAL_WAVES / 4, ts + 4).explicitGet()
+      genesis1: GenesisTransaction = GenesisTransaction.create(alice.toAddress, TOTAL_WAVES / 4, ts).explicitGet()
+      genesis2: GenesisTransaction = GenesisTransaction.create(bob.toAddress, TOTAL_WAVES / 4, ts + 1).explicitGet()
+      genesis3: GenesisTransaction = GenesisTransaction.create(charlie.toAddress, TOTAL_WAVES / 4, ts + 2).explicitGet()
+      genesis4: GenesisTransaction = GenesisTransaction.create(dave.toAddress, TOTAL_WAVES / 4, ts + 4).explicitGet()
     } yield (
       Seq(alice, bob, charlie, dave),
       miner,

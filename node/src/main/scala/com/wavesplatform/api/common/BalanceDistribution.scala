@@ -11,7 +11,7 @@ import monix.reactive.Observable
 import org.iq80.leveldb.DB
 
 import scala.annotation.tailrec
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 
 trait BalanceDistribution {
   import BalanceDistribution._
@@ -27,11 +27,12 @@ trait BalanceDistribution {
     db.resourceObservable
       .flatMap { resource =>
         resource.iterator.seek(
-          globalPrefix ++ after.flatMap(address => resource.get(Keys.addressId(address))).fold(Array.emptyByteArray)(id => Longs.toByteArray(id.toLong + 1))
+          globalPrefix ++ after
+            .flatMap(address => resource.get(Keys.addressId(address)))
+            .fold(Array.emptyByteArray)(id => Longs.toByteArray(id.toLong + 1))
         )
         Observable.fromIterator(Task(new BalanceIterator(resource, globalPrefix, addressId, balanceOf, height, overrides).asScala.filter(_._2 > 0)))
       }
-
 }
 
 object BalanceDistribution {
@@ -69,8 +70,8 @@ object BalanceDistribution {
             }
           }
 
-          pendingPortfolios -= address
           val adjustedBalance = longSemigroup.combine(balance, pendingPortfolios.get(address).fold(0L)(balanceOf))
+          pendingPortfolios -= address
 
           if (currentHeight <= height && adjustedBalance > 0) Some(address -> adjustedBalance)
           else findNextBalance()

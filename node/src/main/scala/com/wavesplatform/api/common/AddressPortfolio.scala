@@ -13,7 +13,7 @@ import com.wavesplatform.transaction.Asset.IssuedAsset
 import com.wavesplatform.utils.ScorexLogging
 
 import scala.annotation.tailrec
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 
 class NFTIterator(addressId: AddressId, maybeAfter: Option[IssuedAsset], resource: DBResource)
     extends AbstractIterator[(IssuedAsset, Long)]
@@ -50,7 +50,7 @@ class AssetBalanceIterator(addressId: AddressId, resource: DBResource) extends A
   override def computeNext(): (IssuedAsset, Long) =
     if (resource.iterator.hasNext && stillSameAddress(resource.iterator.peekNext().getKey)) {
       val currentEntry = resource.iterator.next()
-      val assetId      = IssuedAsset(currentEntry.getKey.takeRight(crypto.DigestLength))
+      val assetId      = IssuedAsset(ByteStr(currentEntry.getKey.takeRight(crypto.DigestLength)))
       val history      = readIntSeq(currentEntry.getValue)
       val balance      = resource.get(Keys.assetBalance(addressId, assetId)(history.headOption.getOrElse(0)))
       assetId -> balance

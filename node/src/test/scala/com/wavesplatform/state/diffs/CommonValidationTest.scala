@@ -2,6 +2,7 @@ package com.wavesplatform.state.diffs
 
 import com.google.protobuf.ByteString
 import com.wavesplatform.account.{AddressScheme, Alias}
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.db.WithState
 import com.wavesplatform.features.{BlockchainFeature, BlockchainFeatures}
@@ -21,7 +22,7 @@ import com.wavesplatform.transaction.{CreateAliasTransaction, DataTransaction, G
 import com.wavesplatform.utils._
 import com.wavesplatform.{NoShrink, TransactionGen}
 import org.scalacheck.Gen
-import org.scalatest.{Assertion, Matchers, PropSpec}
+import org.scalatest.{Matchers, PropSpec}
 import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
 
 class CommonValidationTest extends PropSpec with PropertyChecks with Matchers with TransactionGen with WithState with NoShrink {
@@ -31,8 +32,8 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
       master    <- accountGen
       recipient <- otherAccountGen(candidate = master)
       ts        <- positiveIntGen
-      genesis: GenesisTransaction = GenesisTransaction.create(master, ENOUGH_AMT, ts).explicitGet()
-      transfer: TransferTransaction <- wavesTransferGeneratorP(master, recipient)
+      genesis: GenesisTransaction = GenesisTransaction.create(master.toAddress, ENOUGH_AMT, ts).explicitGet()
+      transfer: TransferTransaction <- wavesTransferGeneratorP(master, recipient.toAddress)
     } yield (genesis, transfer)
 
     forAll(preconditionsAndPayment) {
@@ -47,7 +48,7 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
     }
   }
 
-  private def sponsoredTransactionsCheckFeeTest(feeInAssets: Boolean, feeAmount: Long)(f: Either[ValidationError, Unit] => Assertion): Unit = {
+  private def sponsoredTransactionsCheckFeeTest(feeInAssets: Boolean, feeAmount: Long)(f: Either[ValidationError, Unit] => Any): Unit = {
     val settings = createSettings(BlockchainFeatures.FeeSponsorship -> 0)
     val gen      = sponsorAndSetScriptGen(sponsorship = true, smartToken = false, smartAccount = false, feeInAssets, feeAmount)
     forAll(gen) {
@@ -63,14 +64,14 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
   }
 
   property("checkFee for sponsored transactions sunny") {
-    sponsoredTransactionsCheckFeeTest(feeInAssets = true, feeAmount = 10)(_ shouldBe 'right)
+    sponsoredTransactionsCheckFeeTest(feeInAssets = true, feeAmount = 10)(_.explicitGet())
   }
 
   property("checkFee for sponsored transactions fails if the fee is not enough") {
     sponsoredTransactionsCheckFeeTest(feeInAssets = true, feeAmount = 1)(_ should produce("does not exceed minimal value of"))
   }
 
-  private def smartAccountCheckFeeTest(feeInAssets: Boolean, feeAmount: Long)(f: Either[ValidationError, Unit] => Assertion): Unit = {
+  private def smartAccountCheckFeeTest(feeInAssets: Boolean, feeAmount: Long)(f: Either[ValidationError, Unit] => Any): Unit = {
     val settings = createSettings(BlockchainFeatures.SmartAccounts -> 0)
     val gen      = sponsorAndSetScriptGen(sponsorship = false, smartToken = false, smartAccount = true, feeInAssets, feeAmount)
     forAll(gen) {
@@ -86,7 +87,7 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
   }
 
   property("checkFee for smart accounts sunny") {
-    smartAccountCheckFeeTest(feeInAssets = false, feeAmount = 400000)(_ shouldBe 'right)
+    smartAccountCheckFeeTest(feeInAssets = false, feeAmount = 400000)(_.explicitGet())
   }
 
   private def sponsorAndSetScriptGen(sponsorship: Boolean, smartToken: Boolean, smartAccount: Boolean, feeInAssets: Boolean, feeAmount: Long) =
@@ -97,13 +98,13 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
     } yield {
       val script = ExprScript(TRUE).explicitGet()
 
-      val genesisTx = GenesisTransaction.create(richAcc, ENOUGH_AMT, ts).explicitGet()
+      val genesisTx = GenesisTransaction.create(richAcc.toAddress, ENOUGH_AMT, ts).explicitGet()
 
       val issueTx =
         if (smartToken)
           IssueTransaction(
             TxVersion.V2,
-            richAcc,
+            richAcc.publicKey,
             "test".utf8Bytes,
             "desc".utf8Bytes,
             Long.MaxValue,
@@ -112,11 +113,11 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
             Some(script),
             Constants.UnitsInWave,
             ts
-          ).signWith(richAcc)
+          ).signWith(richAcc.privateKey)
         else
           IssueTransaction(
             TxVersion.V1,
-            richAcc,
+            richAcc.publicKey,
             "test".utf8Bytes,
             "desc".utf8Bytes,
             Long.MaxValue,
@@ -125,17 +126,16 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
             script = None,
             Constants.UnitsInWave,
             ts
-          ).signWith(richAcc)
+          ).signWith(richAcc.privateKey)
 
-      val transferWavesTx = TransferTransaction
-        .selfSigned(1.toByte, richAcc, recipientAcc, Waves, 10 * Constants.UnitsInWave, Waves, 1 * Constants.UnitsInWave, None, ts)
+      val transferWavesTx = TransferTransaction.selfSigned(1.toByte, richAcc, recipientAcc.toAddress, Waves, 10 * Constants.UnitsInWave, Waves, 1 * Constants.UnitsInWave, ByteStr.empty, ts)
         .explicitGet()
 
       val transferAssetTx = TransferTransaction
         .selfSigned(
           1.toByte,
           richAcc,
-          recipientAcc,
+          recipientAcc.toAddress,
           IssuedAsset(issueTx.id()),
           100,
           Waves,
@@ -143,8 +143,7 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
             1 * Constants.UnitsInWave + ScriptExtraFee
           } else {
             1 * Constants.UnitsInWave
-          },
-          None,
+          }, ByteStr.empty,
           ts
         )
         .explicitGet()
@@ -171,16 +170,14 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
           )
         else Seq.empty
 
-      val transferBackTx = TransferTransaction
-        .selfSigned(
+      val transferBackTx = TransferTransaction.selfSigned(
           1.toByte,
           recipientAcc,
-          richAcc,
+          richAcc.toAddress,
           IssuedAsset(issueTx.id()),
           1,
           if (feeInAssets) IssuedAsset(issueTx.id()) else Waves,
-          feeAmount,
-          None,
+          feeAmount, ByteStr.empty,
           ts
         )
         .explicitGet()
@@ -191,12 +188,12 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
   private def createSettings(preActivatedFeatures: (BlockchainFeature, Int)*): FunctionalitySettings =
     TestFunctionalitySettings.Enabled
       .copy(
-        preActivatedFeatures = preActivatedFeatures.map { case (k, v) => k.id -> v }(collection.breakOut),
+        preActivatedFeatures = preActivatedFeatures.map { case (k, v) => k.id -> v }.toMap,
         blocksForFeatureActivation = 1,
         featureCheckBlocksPeriod = 1
       )
 
-  private def smartTokensCheckFeeTest(feeInAssets: Boolean, feeAmount: Long)(f: Either[ValidationError, Unit] => Assertion): Unit = {
+  private def smartTokensCheckFeeTest(feeInAssets: Boolean, feeAmount: Long)(f: Either[ValidationError, Unit] => Any): Unit = {
     val settings = createSettings(BlockchainFeatures.SmartAccounts -> 0, BlockchainFeatures.SmartAssets -> 0)
     val gen      = sponsorAndSetScriptGen(sponsorship = false, smartToken = true, smartAccount = false, feeInAssets, feeAmount)
     forAll(gen) {
@@ -212,7 +209,7 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
   }
 
   property("checkFee for smart tokens sunny") {
-    smartTokensCheckFeeTest(feeInAssets = false, feeAmount = 1)(_ shouldBe 'right)
+    smartTokensCheckFeeTest(feeInAssets = false, feeAmount = 1)(_.explicitGet())
   }
 
   property("disallows other network") {
@@ -222,8 +219,8 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
       timestamp <- positiveLongGen
       amount    <- smallFeeGen
       script    <- scriptGen
-      asset     <- bytes32gen.map(IssuedAsset(_))
-      genesis: GenesisTransaction = GenesisTransaction.create(master, ENOUGH_AMT, timestamp).explicitGet()
+      asset     <- bytes32gen.map(bs => IssuedAsset(ByteStr(bs)))
+      genesis: GenesisTransaction = GenesisTransaction.create(master.toAddress, ENOUGH_AMT, timestamp).explicitGet()
 
       invChainId <- invalidChainIdGen
       invChainAddr  = recipient.toAddress(invChainId)
@@ -241,21 +238,21 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
           amount,
           Waves,
           amount,
-          None,
+          ByteStr.empty,
           timestamp,
           Proofs.empty,
           invChainId
-        ).signWith(master),
-        CreateAliasTransaction(TxVersion.V3, master.publicKey, invChainAlias.name, amount, timestamp, Proofs.empty, invChainId).signWith(master),
-        LeaseTransaction(TxVersion.V3, master.publicKey, invChainAddrOrAlias, amount, amount, timestamp, Proofs.empty, invChainId).signWith(master),
-        InvokeScriptTransaction(TxVersion.V2, master, invChainAddrOrAlias, None, Nil, amount, Waves, timestamp, Proofs.empty, invChainId)
-          .signWith(master),
+        ).signWith(master.privateKey),
+        CreateAliasTransaction(TxVersion.V3, master.publicKey, invChainAlias.name, amount, timestamp, Proofs.empty, invChainId).signWith(master.privateKey),
+        LeaseTransaction(TxVersion.V3, master.publicKey, invChainAddrOrAlias, amount, amount, timestamp, Proofs.empty, invChainId).signWith(master.privateKey),
+        InvokeScriptTransaction(TxVersion.V2, master.publicKey, invChainAddrOrAlias, None, Nil, amount, Waves, timestamp, Proofs.empty, invChainId)
+          .signWith(master.privateKey),
         exchangeV1GeneratorP(master, recipient, asset, Waves, None, invChainId).sample.get,
         IssueTransaction(
           TxVersion.V2,
           master.publicKey,
-          ByteString.copyFrom(asset.id),
-          ByteString.copyFrom(asset.id),
+          ByteString.copyFrom(asset.id.arr),
+          ByteString.copyFrom(asset.id.arr),
           amount,
           8: Byte,
           reissuable = true,
@@ -264,26 +261,26 @@ class CommonValidationTest extends PropSpec with PropertyChecks with Matchers wi
           timestamp,
           Proofs.empty,
           invChainId
-        ).signWith(master),
+        ).signWith(master.privateKey),
         MassTransferTransaction(
           TxVersion.V2,
-          master,
+          master.publicKey,
           Waves,
           Seq(ParsedTransfer(invChainAddrOrAlias, amount)),
           amount,
           timestamp,
-          None,
+          ByteStr.empty,
           Proofs.empty,
           invChainId
-        ).signWith(master),
-        LeaseCancelTransaction(TxVersion.V3, master, asset.id, amount, timestamp, Proofs.empty, invChainId).signWith(master),
-        SetScriptTransaction(TxVersion.V2, master, Some(script), amount, timestamp, Proofs.empty, invChainId).signWith(master),
-        SetAssetScriptTransaction(TxVersion.V2, master, asset, Some(script), amount, timestamp, Proofs.empty, invChainId).signWith(master),
-        BurnTransaction(TxVersion.V2, master, asset, amount, amount, timestamp, Proofs.empty, invChainId).signWith(master),
-        ReissueTransaction(TxVersion.V2, master, asset, amount, reissuable = false, amount, timestamp, Proofs.empty, invChainId).signWith(master),
-        SponsorFeeTransaction(TxVersion.V2, master, asset, Some(amount), amount, timestamp, Proofs.empty, invChainId).signWith(master),
-        UpdateAssetInfoTransaction(TxVersion.V2, master, asset, "1", "2", timestamp, amount, Waves, Proofs.empty, invChainId).signWith(master),
-        DataTransaction(TxVersion.V2, master, Nil, amount, timestamp, Proofs.empty, invChainId).signWith(master)
+        ).signWith(master.privateKey),
+        LeaseCancelTransaction(TxVersion.V3, master.publicKey, asset.id, amount, timestamp, Proofs.empty, invChainId).signWith(master.privateKey),
+        SetScriptTransaction(TxVersion.V2, master.publicKey, Some(script), amount, timestamp, Proofs.empty, invChainId).signWith(master.privateKey),
+        SetAssetScriptTransaction(TxVersion.V2, master.publicKey, asset, Some(script), amount, timestamp, Proofs.empty, invChainId).signWith(master.privateKey),
+        BurnTransaction(TxVersion.V2, master.publicKey, asset, amount, amount, timestamp, Proofs.empty, invChainId).signWith(master.privateKey),
+        ReissueTransaction(TxVersion.V2, master.publicKey, asset, amount, reissuable = false, amount, timestamp, Proofs.empty, invChainId).signWith(master.privateKey),
+        SponsorFeeTransaction(TxVersion.V2, master.publicKey, asset, Some(amount), amount, timestamp, Proofs.empty, invChainId).signWith(master.privateKey),
+        UpdateAssetInfoTransaction(TxVersion.V2, master.publicKey, asset, "1", "2", timestamp, amount, Waves, Proofs.empty, invChainId).signWith(master.privateKey),
+        DataTransaction(TxVersion.V2, master.publicKey, Nil, amount, timestamp, Proofs.empty, invChainId).signWith(master.privateKey)
       )
     } yield (genesis, tx)
 

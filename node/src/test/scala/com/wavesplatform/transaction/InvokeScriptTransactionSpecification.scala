@@ -16,12 +16,12 @@ import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction.TxValidationError.NonPositiveAmount
 import com.wavesplatform.transaction.smart.InvokeScriptTransaction.Payment
 import com.wavesplatform.transaction.smart.{InvokeScriptTransaction, Verifier}
-import com.wavesplatform.{TransactionGen, crypto}
+import com.wavesplatform.{EitherMatchers, TransactionGen, crypto}
 import org.scalatest._
 import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
 import play.api.libs.json.{JsObject, Json}
 
-class InvokeScriptTransactionSpecification extends PropSpec with PropertyChecks with Matchers with TransactionGen {
+class InvokeScriptTransactionSpecification extends PropSpec with PropertyChecks with Matchers with EitherMatchers with TransactionGen {
 
   val publicKey = "73pu8pHFNpj9tmWuYjqnZ962tXzJvLGX86dxjZxGYhoK"
 
@@ -37,8 +37,8 @@ class InvokeScriptTransactionSpecification extends PropSpec with PropertyChecks 
       deser.timestamp shouldEqual transaction.timestamp
       deser.proofs shouldEqual transaction.proofs
       bytes shouldEqual deser.bytes()
-      Verifier.verifyAsEllipticCurveSignature(transaction) shouldBe 'right
-      Verifier.verifyAsEllipticCurveSignature(deser) shouldBe 'right // !!!!!!!!!!!!!!!
+      Verifier.verifyAsEllipticCurveSignature(transaction) should beRight
+      Verifier.verifyAsEllipticCurveSignature(deser) should beRight // !!!!!!!!!!!!!!!
     }
   }
 
@@ -46,7 +46,7 @@ class InvokeScriptTransactionSpecification extends PropSpec with PropertyChecks 
     forAll(invokeScriptGen(paymentListGen), accountGen) { (tx, caller) =>
       val unsigned = transaction.PBTransaction(
         tx.chainId,
-        ByteString.copyFrom(caller.publicKey),
+        ByteString.copyFrom(caller.publicKey.arr),
         Some(Amount.of(PBAmounts.toPBAssetId(tx.feeAssetId), tx.fee)),
         tx.timestamp,
         tx.version,
@@ -58,8 +58,8 @@ class InvokeScriptTransactionSpecification extends PropSpec with PropertyChecks 
           )
         )
       )
-      val proof        = crypto.sign(caller, PBTransactions.vanilla(PBSignedTransaction(Some(unsigned))).explicitGet().bodyBytes())
-      val signed       = PBSignedTransaction(Some(unsigned), Seq(ByteString.copyFrom(proof)))
+      val proof        = crypto.sign(caller.privateKey, PBTransactions.vanilla(PBSignedTransaction(Some(unsigned))).explicitGet().bodyBytes())
+      val signed       = PBSignedTransaction(Some(unsigned), Seq(ByteString.copyFrom(proof.arr)))
       val convTx       = PBTransactions.vanilla(signed).explicitGet()
       val unsafeConvTx = PBTransactions.vanillaUnsafe(signed)
       val modTx        = tx.copy(sender = caller.publicKey, proofs = Proofs(List(proof)))
@@ -77,7 +77,7 @@ class InvokeScriptTransactionSpecification extends PropSpec with PropertyChecks 
       "ABABRFnfcU6tj7ELaOMRU60BmUEXZSyzyWDG4yxX597CilhGAUSJ/UXOr7T3dYRD2dI6xLKS+XNccQNSaToBCQEAAAADZm9vAAAAAQEAAAAFYWxpY2UAAQApAAAAAAAAAAcBWd9xTq2PsQto4xFTrQGZQRdlLLPJYMbjLFfn3sKKWEYAAAAAAAGGoAAAAAFjgvl7hQEAAQBAL4aaBFut6sRjmJqyUMSsW344/xjKn74k0tXmtbAMnZhCIysagYHWE578HZUBuKPxN/3v8OxBmN3lSChpsYrsCg=="
     )
     AddressScheme.current = new AddressScheme {
-      override val chainId: TxVersion = 'D'.toByte
+      override val chainId: Byte = 'D'.toByte
     }
     val json = Json.parse(s"""{
                          "type": 16,
@@ -143,7 +143,7 @@ class InvokeScriptTransactionSpecification extends PropSpec with PropertyChecks 
       .selfSigned(
         1.toByte,
         KeyPair("test3".getBytes("UTF-8")),
-        KeyPair("test4".getBytes("UTF-8")),
+        KeyPair("test4".getBytes("UTF-8")).toAddress,
         Some(
           Terms.FUNCTION_CALL(
             FunctionHeader.User("foo"),
@@ -155,8 +155,7 @@ class InvokeScriptTransactionSpecification extends PropSpec with PropertyChecks 
         Waves,
         1526910778245L
       )
-      .right
-      .get
+      .explicitGet()
 
     (tx.json() - "proofs") shouldEqual (js.asInstanceOf[JsObject] - "proofs")
 
@@ -188,15 +187,14 @@ class InvokeScriptTransactionSpecification extends PropSpec with PropertyChecks 
       .selfSigned(
         1.toByte,
         KeyPair("test3".getBytes("UTF-8")),
-        KeyPair("test4".getBytes("UTF-8")),
+        KeyPair("test4".getBytes("UTF-8")).toAddress,
         None,
         Seq(InvokeScriptTransaction.Payment(7, IssuedAsset(ByteStr.decodeBase58(publicKey).get))),
         100000,
         Waves,
         1526910778245L
       )
-      .right
-      .get
+      .explicitGet()
 
     (tx.json() - "proofs") shouldEqual (js.asInstanceOf[JsObject] - "proofs")
 
@@ -220,9 +218,10 @@ class InvokeScriptTransactionSpecification extends PropSpec with PropertyChecks 
       payment = Some(Seq(Payment(1, Waves))),
       dApp = "3Fb641A9hWy63K18KsBJwns64McmdEATgJd",
       timestamp = 11,
-      proofs = Proofs(List("CC1jQ4qkuVfMvB2Kpg2Go6QKXJxUFC8UUswUxBsxwisrR8N5s3Yc8zA6dhjTwfWKfdouSTAnRXCxTXb3T6pJq3T").map(s => ByteStr.decodeBase58(s).get))
+      proofs =
+        Proofs(List("CC1jQ4qkuVfMvB2Kpg2Go6QKXJxUFC8UUswUxBsxwisrR8N5s3Yc8zA6dhjTwfWKfdouSTAnRXCxTXb3T6pJq3T").map(s => ByteStr.decodeBase58(s).get))
     )
-    req.toTx shouldBe 'right
+    req.toTx.explicitGet()
     AddressScheme.current = DefaultAddressScheme
   }
 
@@ -244,22 +243,24 @@ class InvokeScriptTransactionSpecification extends PropSpec with PropertyChecks 
 
   property(s"can call a func with ARR") {
     val pk = PublicKey.fromBase58String(publicKey).explicitGet()
-    InvokeScriptTransaction.create(
-      1.toByte,
-      pk,
-      pk.toAddress,
-      Some(
-        Terms.FUNCTION_CALL(
-          FunctionHeader.User("foo"),
-          List(ARR(IndexedSeq(CONST_LONG(1L), CONST_LONG(2L)), false).explicitGet)
-        )
-      ),
-      Seq(),
-      1,
-      Waves,
-      1,
-      Proofs.empty
-    ) shouldBe 'right
+    InvokeScriptTransaction
+      .create(
+        1.toByte,
+        pk,
+        pk.toAddress,
+        Some(
+          Terms.FUNCTION_CALL(
+            FunctionHeader.User("foo"),
+            List(ARR(IndexedSeq(CONST_LONG(1L), CONST_LONG(2L)), false).explicitGet())
+          )
+        ),
+        Seq(),
+        1,
+        Waves,
+        1,
+        Proofs.empty
+      )
+      .explicitGet()
   }
 
   property(s"can't call a func with non native(simple) args - CaseObj") {
@@ -316,7 +317,8 @@ class InvokeScriptTransactionSpecification extends PropSpec with PropertyChecks 
       payment = Some(Seq(Payment(0, Waves))),
       dApp = "3Fb641A9hWy63K18KsBJwns64McmdEATgJd",
       timestamp = 11,
-      proofs = Proofs(List("CC1jQ4qkuVfMvB2Kpg2Go6QKXJxUFC8UUswUxBsxwisrR8N5s3Yc8zA6dhjTwfWKfdouSTAnRXCxTXb3T6pJq3T").map(s => ByteStr.decodeBase58(s).get))
+      proofs =
+        Proofs(List("CC1jQ4qkuVfMvB2Kpg2Go6QKXJxUFC8UUswUxBsxwisrR8N5s3Yc8zA6dhjTwfWKfdouSTAnRXCxTXb3T6pJq3T").map(s => ByteStr.decodeBase58(s).get))
     )
     req.toTx shouldBe Left(NonPositiveAmount(0, "Waves"))
     AddressScheme.current = DefaultAddressScheme
@@ -335,10 +337,11 @@ class InvokeScriptTransactionSpecification extends PropSpec with PropertyChecks 
           List(Terms.CONST_BYTESTR(ByteStr.decodeBase64("YWxpY2U=").get).explicitGet())
         )
       ),
-      payment = Some(Seq(Payment(-1, Waves))),
+      payment = Some(Seq(Payment(-1L, Waves))),
       dApp = "3Fb641A9hWy63K18KsBJwns64McmdEATgJd",
       timestamp = 11,
-      proofs = Proofs(List("CC1jQ4qkuVfMvB2Kpg2Go6QKXJxUFC8UUswUxBsxwisrR8N5s3Yc8zA6dhjTwfWKfdouSTAnRXCxTXb3T6pJq3T").map(s => ByteStr.decodeBase58(s).get))
+      proofs =
+        Proofs(List("CC1jQ4qkuVfMvB2Kpg2Go6QKXJxUFC8UUswUxBsxwisrR8N5s3Yc8zA6dhjTwfWKfdouSTAnRXCxTXb3T6pJq3T").map(s => ByteStr.decodeBase58(s).get))
     )
     req.toTx shouldBe Left(NonPositiveAmount(-1, "Waves"))
     AddressScheme.current = DefaultAddressScheme

@@ -8,7 +8,7 @@ import com.wavesplatform.http.{RestAPISettingsHelper, RouteSpec}
 import com.wavesplatform.lang.script.Script
 import com.wavesplatform.lang.v1.estimator.ScriptEstimatorV1
 import com.wavesplatform.network.UtxPoolSynchronizer
-import com.wavesplatform.state.{AssetDescription, Blockchain, Height}
+import com.wavesplatform.state.{AssetDescription, AssetScriptInfo, Blockchain, Height}
 import com.wavesplatform.transaction.Asset.IssuedAsset
 import com.wavesplatform.transaction.assets.IssueTransaction
 import com.wavesplatform.{NoShrink, TestTime, TestValues, TestWallet, TransactionGen}
@@ -47,7 +47,7 @@ class AssetsApiRouteSpec
       reissuable = smartAssetTx.reissuable,
       totalVolume = smartAssetTx.quantity,
       lastUpdatedAt = Height @@ 0,
-      script = Some((script, Script.estimate(script, ScriptEstimatorV1, useContractVerifierLimit = false).explicitGet())),
+      script = Some(AssetScriptInfo(script, Script.estimate(script, ScriptEstimatorV1, useContractVerifierLimit = false).explicitGet())),
       sponsorship = 0,
       nft = smartAssetTx.decimals == 0 && smartAssetTx.quantity == 1 && !smartAssetTx.reissuable
     )
@@ -73,7 +73,7 @@ class AssetsApiRouteSpec
   }
 
   routePath("/{assetId}/distribution/1/limit/10") in {
-    (blockchain.height _).when().returning(2)
+    (() => blockchain.height).when().returning(2)
     (assetsApi.assetDistribution _).when(TestValues.asset, *, *).returning(Observable(TestValues.address -> 10L))
 
     Get(routePath(s"/${TestValues.asset.id}/distribution/1/limit/10")) ~> route ~> check {
@@ -129,7 +129,7 @@ class AssetsApiRouteSpec
     (response \ "assetId").as[String] shouldBe tx.id().toString
     (response \ "issueHeight").as[Long] shouldBe 1
     (response \ "issueTimestamp").as[Long] shouldBe tx.timestamp
-    (response \ "issuer").as[String] shouldBe tx.sender.stringRepr
+    (response \ "issuer").as[String] shouldBe tx.sender.toAddress.toString
     (response \ "name").as[String] shouldBe tx.name.toStringUtf8
     (response \ "description").as[String] shouldBe tx.description.toStringUtf8
     (response \ "decimals").as[Int] shouldBe tx.decimals

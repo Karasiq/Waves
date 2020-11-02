@@ -6,7 +6,9 @@ import com.wavesplatform.api.http.ApiError._
 import com.wavesplatform.api.http._
 import com.wavesplatform.api.http.assets._
 import com.wavesplatform.api.http.requests.{SignedTransferV1Request, SignedTransferV2Request}
-import com.wavesplatform.common.utils.Base58
+import com.wavesplatform.common.state.ByteStr
+import com.wavesplatform.common.utils.{Base58, EitherExt2}
+import com.wavesplatform.it.util.DoubleExt
 import com.wavesplatform.state.Blockchain
 import com.wavesplatform.state.diffs.TransactionDiffer.TransactionValidationError
 import com.wavesplatform.transaction.TxValidationError.GenericError
@@ -20,6 +22,7 @@ import org.scalacheck.{Gen => G}
 import org.scalamock.scalatest.PathMockFactory
 import org.scalatestplus.scalacheck.{ScalaCheckPropertyChecks => PropertyChecks}
 import play.api.libs.json._
+
 class AssetsBroadcastRouteSpec
     extends RouteSpec("/assets/broadcast/")
     with RequestGen
@@ -124,7 +127,7 @@ class AssetsBroadcastRouteSpec
           posting(br.copy(senderPublicKey = pk)) should produce(InvalidAddress)
         }
         forAll(nonPositiveLong) { q =>
-          posting(br.copy(quantity = q)) should produce(NegativeAmount(s"$q of assets"))
+          posting(br.copy(amount = q)) should produce(NegativeAmount(s"$q of assets"))
         }
         forAll(nonPositiveLong) { fee =>
           posting(br.copy(fee = fee)) should produce(InsufficientFee())
@@ -157,7 +160,7 @@ class AssetsBroadcastRouteSpec
         }
         forAll(longAttachment) { a =>
           posting(tr.copy(attachment = Some(a))) should produce(
-            WrongJson(errors = Seq(JsPath \ "attachment" -> Seq(JsonValidationError(s"attachment length ${a.length} exceeds maximum length of 192"))))
+            WrongJson(errors = Seq(JsPath \ "attachment" -> Seq(JsonValidationError(s"Length ${a.length} exceeds maximum length of 192"))))
           )
         }
         forAll(nonPositiveLong) { fee =>
@@ -168,7 +171,15 @@ class AssetsBroadcastRouteSpec
   }
 
   "compatibility" - {
-    val route = AssetsApiRoute(restAPISettings, stub[Wallet], DummyUtxPoolSynchronizer.accepting, stub[Blockchain], stub[Time], stub[CommonAccountsApi], stub[CommonAssetsApi]).route
+    val route = AssetsApiRoute(
+      restAPISettings,
+      stub[Wallet],
+      DummyUtxPoolSynchronizer.accepting,
+      stub[Blockchain],
+      stub[Time],
+      stub[CommonAccountsApi],
+      stub[CommonAssetsApi]
+    ).route
 
     val seed               = "seed".getBytes("UTF-8")
     val senderPrivateKey   = Wallet.generateNewAccount(seed, 0)
@@ -181,26 +192,25 @@ class AssetsBroadcastRouteSpec
           senderPrivateKey,
           receiverPrivateKey.toAddress,
           Asset.Waves,
-          1 * Waves,
+          1.waves,
           Asset.Waves,
-          Waves / 3,
-          None,
+          0.3.waves,
+          ByteStr.empty,
           System.currentTimeMillis()
         )
-        .right
-        .get
+        .explicitGet()
     )
 
     val versionedTransferRequest = createSignedVersionedTransferRequest(
       TransferTransaction(
         version = 2.toByte,
-        sender = senderPrivateKey,
+        sender = senderPrivateKey.publicKey,
         recipient = receiverPrivateKey.toAddress,
         assetId = Asset.Waves,
-        amount = 1 * Waves,
+        amount = 1.waves,
         feeAssetId = Asset.Waves,
-        fee = Waves / 3,
-        attachment = None,
+        fee = 0.3.waves,
+        attachment = ByteStr.empty,
         timestamp = System.currentTimeMillis(),
         proofs = Proofs(Seq.empty),
         chainId = receiverPrivateKey.toAddress.chainId
@@ -229,14 +239,14 @@ class AssetsBroadcastRouteSpec
   protected def createSignedTransferRequest(tx: TransferTransaction): SignedTransferV1Request = {
     import tx._
     SignedTransferV1Request(
-      Base58.encode(tx.sender),
+      Base58.encode(tx.sender.arr),
       assetId.maybeBase58Repr,
       recipient.stringRepr,
       amount,
       fee,
       feeAssetId.maybeBase58Repr,
       timestamp,
-      Some(Base58.encode(attachment.toBytesStrict)),
+      Some(Base58.encode(attachment.arr)),
       proofs.toSignature.toString
     )
   }
@@ -244,14 +254,14 @@ class AssetsBroadcastRouteSpec
   protected def createSignedVersionedTransferRequest(tx: TransferTransaction): SignedTransferV2Request = {
     import tx._
     SignedTransferV2Request(
-      Base58.encode(tx.sender),
+      Base58.encode(tx.sender.arr),
       assetId.maybeBase58Repr,
       recipient.stringRepr,
       amount,
       feeAssetId.maybeBase58Repr,
       fee,
       timestamp,
-      Some(Base58.encode(attachment.toBytesStrict)),
+      Some(Base58.encode(attachment.arr)),
       proofs.proofs.map(_.toString).toList
     )
   }

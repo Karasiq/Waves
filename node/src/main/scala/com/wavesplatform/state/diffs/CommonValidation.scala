@@ -1,9 +1,7 @@
 package com.wavesplatform.state.diffs
 
 import cats._
-import cats.implicits._
 import com.wavesplatform.account.{Address, AddressScheme}
-import com.wavesplatform.features.FeatureProvider._
 import com.wavesplatform.features.OverdraftValidationProvider._
 import com.wavesplatform.features.{BlockchainFeature, BlockchainFeatures}
 import com.wavesplatform.lang.ValidationError
@@ -23,7 +21,7 @@ import com.wavesplatform.transaction.smart.InvokeScriptTransaction.Payment
 import com.wavesplatform.transaction.smart.{InvokeScriptTransaction, SetScriptTransaction}
 import com.wavesplatform.transaction.transfer._
 
-import scala.util.{Left, Right, Try}
+import scala.util.{Left, Right}
 
 object CommonValidation {
 
@@ -76,15 +74,15 @@ object CommonValidation {
       }
 
       tx match {
-        case ptx: PaymentTransaction if blockchain.balance(ptx.sender, Waves) < (ptx.amount + ptx.fee) =>
+        case ptx: PaymentTransaction if blockchain.balance(ptx.sender.toAddress, Waves) < (ptx.amount + ptx.fee) =>
           Left(
             GenericError(
               "Attempt to pay unavailable funds: balance " +
-                s"${blockchain.balance(ptx.sender, Waves)} is less than ${ptx.amount + ptx.fee}"
+                s"${blockchain.balance(ptx.sender.toAddress, Waves)} is less than ${ptx.amount + ptx.fee}"
             )
           )
-        case ttx: TransferTransaction     => checkTransfer(ttx.sender, ttx.assetId, ttx.amount, ttx.feeAssetId, ttx.fee)
-        case mtx: MassTransferTransaction => checkTransfer(mtx.sender, mtx.assetId, mtx.transfers.map(_.amount).sum, Waves, mtx.fee)
+        case ttx: TransferTransaction     => checkTransfer(ttx.sender.toAddress, ttx.assetId, ttx.amount, ttx.feeAssetId, ttx.fee)
+        case mtx: MassTransferTransaction => checkTransfer(mtx.sender.toAddress, mtx.assetId, mtx.transfers.map(_.amount).sum, Waves, mtx.fee)
         case citx: InvokeScriptTransaction =>
           val foldPayments: Iterable[Payment] => Iterable[Payment] =
             if (blockchain.useCorrectPaymentCheck)
@@ -96,10 +94,10 @@ object CommonValidation {
             address <- blockchain.resolveAlias(citx.dAppAddressOrAlias)
             allowFeeOverdraft = blockchain.accountScript(address) match {
               case Some(AccountScriptInfo(_, ContractScriptImpl(version, _), _, _)) if version >= V4 && blockchain.useCorrectPaymentCheck => true
-              case _                                                                                          => false
+              case _                                                                                                                      => false
             }
             check <- foldPayments(citx.payments)
-              .map(p => checkTransfer(citx.sender, p.assetId, p.amount, citx.feeAssetId, citx.fee, allowFeeOverdraft))
+              .map(p => checkTransfer(citx.sender.toAddress, p.assetId, p.amount, citx.feeAssetId, citx.fee, allowFeeOverdraft))
               .find(_.isLeft)
               .getOrElse(Right(tx))
           } yield check
@@ -138,11 +136,11 @@ object CommonValidation {
       val v4Activation = activationBarrier(BlockchainFeatures.BlockV5)
 
       def scriptVersionActivation(sc: Script): Either[ActivationError, T] = sc.stdLibVersion match {
-        case V1 | V2 | V3 if sc.containsArray    => v4Activation
-        case V1 | V2 if sc.containsBlockV2.value => v3Activation
-        case V1 | V2                             => Right(tx)
-        case V3                                  => v3Activation
-        case V4                                  => v4Activation
+        case V1 | V2 | V3 if sc.containsArray      => v4Activation
+        case V1 | V2 if sc.containsBlockV2.value() => v3Activation
+        case V1 | V2                               => Right(tx)
+        case V3                                    => v3Activation
+        case V4                                    => v4Activation
       }
 
       def scriptTypeActivation(sc: Script): Either[ActivationError, T] = sc match {
@@ -260,12 +258,4 @@ object CommonValidation {
         )
       case _ => Right(tx)
     }
-
-  def validateOverflow(dataList: Traversable[Long], errMsg: String): Either[ValidationError, Unit] = {
-    Try(dataList.foldLeft(0L)(Math.addExact))
-      .fold(
-        _ => GenericError(errMsg).asLeft[Unit],
-        _ => ().asRight[ValidationError]
-      )
-  }
 }

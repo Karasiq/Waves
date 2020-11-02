@@ -2,6 +2,7 @@ package com.wavesplatform.it.sync
 
 import com.typesafe.config.{Config, ConfigFactory}
 import com.wavesplatform.account.AddressOrAlias
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.it.api.SyncHttpApi._
 import com.wavesplatform.it.api.TransactionInfo
@@ -25,7 +26,7 @@ class NodeRestartTestSuite extends FreeSpec with Matchers with WaitForHeight2 wi
   }
 
   "create many addresses and check them after node restart" in {
-    1 to 10 map (_ => nodeA.createAddress())
+    1 to 10 map (_ => nodeA.createKeyPair())
     val setOfAddresses      = nodeA.getAddresses
     val nodeAWithOtherPorts = docker.restartContainer(dockerNodes().head)
     val maxHeight           = nodes.map(_.height).max
@@ -37,13 +38,13 @@ class NodeRestartTestSuite extends FreeSpec with Matchers with WaitForHeight2 wi
     val txJson = TransferTransaction
       .selfSigned(
         1.toByte,
-        nodeB.privateKey,
+        nodeB.keyPair,
         AddressOrAlias.fromString(nodeA.address).explicitGet(),
         Waves,
         1.waves,
         Waves,
         minFee,
-        None,
+        ByteStr.empty,
         System.currentTimeMillis()
       )
       .explicitGet()

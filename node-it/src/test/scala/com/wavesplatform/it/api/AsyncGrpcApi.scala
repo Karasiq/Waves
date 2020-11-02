@@ -12,7 +12,7 @@ import com.wavesplatform.crypto
 import com.wavesplatform.it.Node
 import com.wavesplatform.it.util.GlobalTimer.{instance => timer}
 import com.wavesplatform.it.util._
-import com.wavesplatform.lang.script.Script
+import com.wavesplatform.lang.script.{Script => Scr}
 import com.wavesplatform.lang.v1.Serde
 import com.wavesplatform.lang.v1.compiler.Terms.FUNCTION_CALL
 import com.wavesplatform.protobuf.Amount
@@ -57,7 +57,8 @@ object AsyncGrpcApi {
       result.runToFuture.map { r =>
         import com.wavesplatform.state.{InvokeScriptResult => VISR}
         r.map { r =>
-          val tx     = PBTransactions.vanillaUnsafe(r.getTransaction)
+          val tx = PBTransactions.vanillaUnsafe(r.getTransaction)
+          assert(r.getResult.transfers.forall(_.address.size() == 20))
           val result = Json.toJson(VISR.fromPB(r.getResult)).as[StateChangesDetails]
           (tx, result)
         }
@@ -80,12 +81,12 @@ object AsyncGrpcApi {
         reissuable: Boolean,
         fee: Long,
         description: String = "",
-        script: Either[Array[Byte], Option[Script]] = Right(None),
+        script: Either[Array[Byte], Option[Scr]] = Right(None),
         version: Int = 2
     ): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(source.publicKey),
+        ByteString.copyFrom(source.publicKey.arr),
         Some(Amount.of(ByteString.EMPTY, fee)),
         System.currentTimeMillis(),
         version,
@@ -95,8 +96,9 @@ object AsyncGrpcApi {
       script match {
         case Left(_) => transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.EMPTY)))
         case _ =>
-          val proofs = crypto.sign(source, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
-          transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs))))
+          val proofs =
+            crypto.sign(source.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
+          transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
       }
     }
 
@@ -108,12 +110,12 @@ object AsyncGrpcApi {
         version: Int = 2,
         assetId: String = "WAVES",
         feeAssetId: String = "WAVES",
-        attachment: Attachment.Attachment = Attachment.Attachment.Empty,
+        attachment: ByteString = ByteString.EMPTY,
         timestamp: Long = System.currentTimeMillis
     ): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(source.publicKey),
+        ByteString.copyFrom(source.publicKey.arr),
         Some(Amount.of(if (feeAssetId == "WAVES") ByteString.EMPTY else ByteString.copyFrom(Base58.decode(feeAssetId)), fee)),
         timestamp,
         version,
@@ -121,13 +123,13 @@ object AsyncGrpcApi {
           TransferTransactionData.of(
             Some(recipient),
             Some(Amount.of(if (assetId == "WAVES") ByteString.EMPTY else ByteString.copyFrom(Base58.decode(assetId)), amount)),
-            Some(Attachment(attachment))
+            attachment
           )
         )
       )
       try {
-        val proofs = crypto.sign(source, PBTransactions.vanilla(SignedTransaction(Some(unsigned))).explicitGet().bodyBytes())
-        transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs))))
+        val proofs = crypto.sign(source.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned))).explicitGet().bodyBytes())
+        transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
       } catch {
         case _: IllegalArgumentException => transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.EMPTY)))
       }
@@ -143,7 +145,7 @@ object AsyncGrpcApi {
     ): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(source.publicKey),
+        ByteString.copyFrom(source.publicKey.arr),
         Some(Amount.of(ByteString.EMPTY, fee)),
         System.currentTimeMillis(),
         version,
@@ -155,8 +157,8 @@ object AsyncGrpcApi {
         )
       )
 
-      val proofs      = crypto.sign(source, PBTransactions.vanilla(SignedTransaction(Some(unsigned))).explicitGet().bodyBytes())
-      val transaction = SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs)))
+      val proofs      = crypto.sign(source.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned))).explicitGet().bodyBytes())
+      val transaction = SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr)))
 
       transactions.broadcast(transaction)
     }
@@ -164,7 +166,7 @@ object AsyncGrpcApi {
     def broadcastCreateAlias(source: KeyPair, alias: String, fee: Long, version: Int = 2): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(source.publicKey),
+        ByteString.copyFrom(source.publicKey.arr),
         Some(Amount.of(ByteString.EMPTY, fee)),
         System.currentTimeMillis,
         version,
@@ -173,8 +175,8 @@ object AsyncGrpcApi {
       if (Alias.create(alias).isLeft) {
         transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.EMPTY)))
       } else {
-        val proofs = crypto.sign(source, PBTransactions.vanilla(SignedTransaction(Some(unsigned))).explicitGet().bodyBytes())
-        transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs))))
+        val proofs = crypto.sign(source.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned))).explicitGet().bodyBytes())
+        transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
       }
     }
 
@@ -187,7 +189,7 @@ object AsyncGrpcApi {
     ): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(source.publicKey),
+        ByteString.copyFrom(source.publicKey.arr),
         Some(Amount.of(ByteString.EMPTY, fee)),
         timestamp,
         version,
@@ -196,8 +198,8 @@ object AsyncGrpcApi {
       if (PBTransactions.vanilla(SignedTransaction(Some(unsigned))).isLeft) {
         transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.EMPTY)))
       } else {
-        val proofs = crypto.sign(source, PBTransactions.vanilla(SignedTransaction(Some(unsigned))).explicitGet().bodyBytes())
-        transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs))))
+        val proofs = crypto.sign(source.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned))).explicitGet().bodyBytes())
+        transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
       }
     }
 
@@ -217,7 +219,7 @@ object AsyncGrpcApi {
 
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(matcher.publicKey),
+        ByteString.copyFrom(matcher.publicKey.arr),
         Some(Amount.of(if (matcherFeeAssetId == "WAVES") ByteString.EMPTY else ByteString.copyFrom(Base58.decode(matcherFeeAssetId)), fee)),
         timestamp,
         version,
@@ -232,13 +234,13 @@ object AsyncGrpcApi {
         )
       )
 
-      val proofs      = crypto.sign(matcher, PBTransactions.vanilla(SignedTransaction(Some(unsigned))).right.get.bodyBytes())
-      val transaction = SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs)))
+      val proofs      = crypto.sign(matcher.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned))).explicitGet().bodyBytes())
+      val transaction = SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr)))
 
       transactions.broadcast(transaction)
     }
 
-    private def toPBScript(v: Either[Array[Byte], Option[Script]]): ByteString = v match {
+    private def toPBScript(v: Either[Array[Byte], Option[Scr]]): ByteString = v match {
       case Left(bytes) if bytes.length > 0 => ByteString.copyFrom(bytes)
       case Right(maybeScript)              => PBTransactions.toPBScript(maybeScript)
       case _                               => ByteString.EMPTY
@@ -246,14 +248,14 @@ object AsyncGrpcApi {
 
     def setScript(
         sender: KeyPair,
-        script: Either[Array[Byte], Option[Script]],
+        script: Either[Array[Byte], Option[Scr]],
         fee: Long,
         timestamp: Long = System.currentTimeMillis(),
         version: Int = 1
     ): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(sender.publicKey),
+        ByteString.copyFrom(sender.publicKey.arr),
         Some(Amount.of(ByteString.EMPTY, fee)),
         timestamp,
         version,
@@ -263,8 +265,9 @@ object AsyncGrpcApi {
       script match {
         case Left(_) => transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.EMPTY)))
         case _ =>
-          val proofs = crypto.sign(sender, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
-          transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs))))
+          val proofs =
+            crypto.sign(sender.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
+          transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
       }
     }
 
@@ -320,7 +323,7 @@ object AsyncGrpcApi {
     def broadcastBurn(source: KeyPair, assetId: String, amount: Long, fee: Long, version: Int = 2): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(source.publicKey),
+        ByteString.copyFrom(source.publicKey.arr),
         Some(Amount.of(ByteString.EMPTY, fee)),
         System.currentTimeMillis(),
         version,
@@ -331,8 +334,8 @@ object AsyncGrpcApi {
         )
       )
 
-      val proofs      = crypto.sign(source, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
-      val transaction = SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs)))
+      val proofs      = crypto.sign(source.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
+      val transaction = SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr)))
       transactions.broadcast(transaction)
     }
 
@@ -342,14 +345,14 @@ object AsyncGrpcApi {
     def broadcastSponsorFee(sender: KeyPair, minFee: Option[Amount], fee: Long, version: Int = 1): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(sender.publicKey),
+        ByteString.copyFrom(sender.publicKey.arr),
         Some(Amount.of(ByteString.EMPTY, fee)),
         System.currentTimeMillis,
         version,
         PBTransaction.Data.SponsorFee(SponsorFeeTransactionData.of(minFee))
       )
-      val proofs = crypto.sign(sender, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
-      transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs))))
+      val proofs = crypto.sign(sender.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
+      transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
     }
 
     def broadcastMassTransfer(
@@ -362,7 +365,7 @@ object AsyncGrpcApi {
     ): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(sender.publicKey),
+        ByteString.copyFrom(sender.publicKey.arr),
         Some(Amount.of(ByteString.EMPTY, fee)),
         System.currentTimeMillis(),
         version,
@@ -370,12 +373,12 @@ object AsyncGrpcApi {
           MassTransferTransactionData.of(
             if (assetId.isDefined) ByteString.copyFrom(Base58.decode(assetId.get)) else ByteString.EMPTY,
             transfers,
-            if (attachment.isEmpty) None else Some(Attachment.of(Attachment.Attachment.BinaryValue(attachment)))
+            attachment
           )
         )
       )
-      val proofs = crypto.sign(sender, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
-      transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs))))
+      val proofs = crypto.sign(sender.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
+      transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
     }
 
     def broadcastInvokeScript(
@@ -389,7 +392,7 @@ object AsyncGrpcApi {
     ): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(caller.publicKey),
+        ByteString.copyFrom(caller.publicKey.arr),
         Some(Amount.of(feeAssetId, fee)),
         System.currentTimeMillis,
         version,
@@ -401,47 +404,47 @@ object AsyncGrpcApi {
           )
         )
       )
-      val proofs = crypto.sign(caller, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
-      transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs))))
+      val proofs = crypto.sign(caller.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
+      transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
     }
 
     def broadcastLease(source: KeyPair, recipient: Recipient, amount: Long, fee: Long, version: Int = 2): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(source.publicKey),
+        ByteString.copyFrom(source.publicKey.arr),
         Some(Amount.of(ByteString.EMPTY, fee)),
         System.currentTimeMillis,
         version,
         PBTransaction.Data.Lease(LeaseTransactionData.of(Some(recipient), amount))
       )
-      val proofs = crypto.sign(source, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
-      transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs))))
+      val proofs = crypto.sign(source.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
+      transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
     }
 
     def broadcastLeaseCancel(source: KeyPair, leaseId: String, fee: Long, version: Int = 2): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(source.publicKey),
+        ByteString.copyFrom(source.publicKey.arr),
         Some(Amount.of(ByteString.EMPTY, fee)),
         System.currentTimeMillis,
         version,
         PBTransaction.Data.LeaseCancel(LeaseCancelTransactionData.of(ByteString.copyFrom(Base58.decode(leaseId))))
       )
-      val proofs = crypto.sign(source, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
-      transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs))))
+      val proofs = crypto.sign(source.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
+      transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
     }
 
     def setAssetScript(
         sender: KeyPair,
         assetId: String,
-        script: Either[Array[Byte], Option[Script]],
+        script: Either[Array[Byte], Option[Scr]],
         fee: Long,
         timestamp: Long = System.currentTimeMillis(),
         version: Int = 1
     ): Future[PBSignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(sender.publicKey),
+        ByteString.copyFrom(sender.publicKey.arr),
         Some(Amount.of(ByteString.EMPTY, fee)),
         timestamp,
         version,
@@ -451,8 +454,9 @@ object AsyncGrpcApi {
       script match {
         case Left(_) => transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.EMPTY)))
         case _ =>
-          val proofs = crypto.sign(sender, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
-          transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs))))
+          val proofs =
+            crypto.sign(sender.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
+          transactions.broadcast(SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr))))
       }
     }
 
@@ -467,7 +471,7 @@ object AsyncGrpcApi {
     ): Future[SignedTransaction] = {
       val unsigned = PBTransaction(
         chainId,
-        ByteString.copyFrom(sender.publicKey),
+        ByteString.copyFrom(sender.publicKey.arr),
         Some(Amount.of(if (feeAsset == Waves) ByteString.EMPTY else ByteString.copyFrom(Base58.decode(feeAsset.maybeBase58Repr.get)), fee)),
         System.currentTimeMillis(),
         version,
@@ -480,8 +484,8 @@ object AsyncGrpcApi {
         )
       )
 
-      val proofs      = crypto.sign(sender, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
-      val transaction = SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs)))
+      val proofs      = crypto.sign(sender.privateKey, PBTransactions.vanilla(SignedTransaction(Some(unsigned)), unsafe = true).explicitGet().bodyBytes())
+      val transaction = SignedTransaction.of(Some(unsigned), Seq(ByteString.copyFrom(proofs.arr)))
 
       transactions.broadcast(transaction)
     }
@@ -496,7 +500,7 @@ object AsyncGrpcApi {
   }
 
   private def createCallObserver[T](implicit s: Scheduler): (StreamObserver[T], Task[List[T]]) = {
-    val subj = ConcurrentSubject.publishToOne[T]
+    val subj = ConcurrentSubject.replay[T]
 
     val observer = new StreamObserver[T] {
       override def onNext(value: T): Unit      = subj.onNext(value)

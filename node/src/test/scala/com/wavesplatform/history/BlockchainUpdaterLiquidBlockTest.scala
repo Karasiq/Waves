@@ -17,6 +17,7 @@ class BlockchainUpdaterLiquidBlockTest
     with PropertyChecks
     with DomainScenarioDrivenPropertyCheck
     with Matchers
+    with EitherMatchers
     with TransactionGen
     with BlocksTransactionsHelpers
     with NoShrink {
@@ -35,7 +36,7 @@ class BlockchainUpdaterLiquidBlockTest
 
       val prevBlock = unsafeBlock(
         reference = randomSig,
-        txs = Seq(GenesisTransaction.create(richAccount, ENOUGH_AMT, 0).explicitGet()),
+        txs = Seq(GenesisTransaction.create(richAccount.toAddress, ENOUGH_AMT, 0).explicitGet()),
         signer = TestBlock.defaultSigner,
         version = 3,
         timestamp = 0
@@ -97,7 +98,7 @@ class BlockchainUpdaterLiquidBlockTest
           d.blockchainUpdater.processBlock(genBlock)
           d.blockchainUpdater.processBlock(keyBlock)
           microBlocks.foreach { mb =>
-            d.blockchainUpdater.processMicroBlock(mb) shouldBe 'right
+            d.blockchainUpdater.processMicroBlock(mb) should beRight
           }
         }
     }

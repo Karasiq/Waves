@@ -19,7 +19,7 @@ import com.wavesplatform.utils.ScorexLogging
 import org.iq80.leveldb.DB
 
 import scala.annotation.tailrec
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 import scala.util.Try
@@ -54,7 +54,7 @@ object Explorer extends ScorexLogging {
           (args, flags)
       }
 
-    val (args, flags)    = parseArgs(argsRaw)
+    val (args, flags)    = parseArgs(argsRaw.toIndexedSeq)
     val configFileOption = flags.collectFirst { case ("-c" | "--config", config) if config.nonEmpty => new File(config) }
 
     val settings = Application.loadApplicationConfig(configFileOption)
@@ -100,11 +100,11 @@ object Explorer extends ScorexLogging {
         case "DA" =>
           val addressIds = mutable.Seq[(BigInt, Address)]()
           db.iterateOver(KeyTags.AddressId) { e =>
-            val address   = Address.fromBytes(ByteStr(e.getKey.drop(2)), settings.blockchainSettings.addressSchemeCharacter.toByte)
+            val address   = Address.fromBytes(e.getKey.drop(2), settings.blockchainSettings.addressSchemeCharacter.toByte)
             val addressId = BigInt(e.getValue)
             addressIds :+ (addressId -> address)
           }
-          val addressIdToAddresses = addressIds.groupBy(_._1).mapValues(_.map(_._2))
+          val addressIdToAddresses = addressIds.groupBy(_._1).view.mapValues(_.map(_._2))
 
           addressIdToAddresses.find(_._2.size > 1) match {
             case Some((addressId, addresses)) => log.error(s"Something wrong, addressId is duplicated: $addressId for (${addresses.mkString(", ")})")
@@ -168,7 +168,7 @@ object Explorer extends ScorexLogging {
 
           db.iterateOver(KeyTags.IdToAddress) { e =>
             result.compute(
-              Address.fromBytes(ByteStr(e.getValue)).explicitGet(),
+              Address.fromBytes(e.getValue).explicitGet(),
               (_, prev) =>
                 prev match {
                   case null    => 1

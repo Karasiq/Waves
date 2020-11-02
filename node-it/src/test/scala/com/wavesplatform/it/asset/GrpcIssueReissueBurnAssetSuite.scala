@@ -21,17 +21,17 @@ import org.scalatest.FreeSpec
 import scala.util.Random
 
 class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSuiteLike {
-  val initialWavesBalance = 100.waves
-  val setScriptPrice      = 0.01.waves
+  private val initialWavesBalance = 100.waves
+  private val setScriptPrice      = 0.01.waves
 
-  val CallableMethod    = "@Callable"
-  val TransactionMethod = "Transaction"
+  private val CallableMethod    = "@Callable"
+  private val TransactionMethod = "Transaction"
 
-  val simpleNonreissuableAsset = Asset("Simple", "SimpleAsset", "description", 100500, false, 8, 0)
-  val simpleReissuableAsset    = Asset("Reissuable", "ReissuableAsset", "description", 100000000, true, 3, 0)
-  val longMaxAsset             = Asset("Long max", "name", "", Long.MaxValue, true, 8, Long.MaxValue)
-  val longMinAsset             = Asset("Long min", "name" * 4, "A" * 1000, Long.MaxValue, true, 0, Long.MinValue)
-  val nftAsset                 = Asset("NFT", "NFTAsset", "description", 1, false, 0, 0)
+  private val simpleNonreissuableAsset = Asset("Simple", "SimpleAsset", "description", 100500, reissuable = false, 8, 0)
+  private val simpleReissuableAsset    = Asset("Reissuable", "ReissuableAsset", "description", 100000000, reissuable = true, 3, 0)
+  private val longMaxAsset             = Asset("Long max", "name", "", Long.MaxValue, reissuable = true, 8, Long.MaxValue)
+  private val longMinAsset             = Asset("Long min", "name" * 4, "A" * 1000, Long.MaxValue, reissuable = true, 0, Long.MinValue)
+  private val nftAsset                 = Asset("NFT", "NFTAsset", "description", 1, reissuable = false, 0, 0)
 
   for (method <- Seq(CallableMethod, TransactionMethod)) s"Asset Issue/Reissue/Burn via $method" - {
     val isCallable = method == CallableMethod
@@ -94,8 +94,8 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
       val addedQuantity     = 100500
       val initialReissuable = simpleReissuableAsset.reissuable
 
-      reissue(acc, TransactionMethod, assetId, addedQuantity / 2, true)
-      reissue(acc, CallableMethod, assetId, addedQuantity / 2, false)
+      reissue(acc, TransactionMethod, assetId, addedQuantity / 2, reissuable = true)
+      reissue(acc, CallableMethod, assetId, addedQuantity / 2, reissuable = false)
 
       sender.assetInfo(assetId).reissuable shouldBe !initialReissuable
       sender.assetInfo(assetId).totalVolume shouldBe initialQuantity + addedQuantity
@@ -106,10 +106,7 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
       val acc     = createDapp(script(simpleNonreissuableAsset))
       val txIssue = issue(acc, method, simpleNonreissuableAsset, invocationCost(1))
       val assetId = validateIssuedAssets(acc, txIssue, simpleNonreissuableAsset, method = method)
-      assertGrpcError(
-        reissue(acc, method, assetId, 100500, reissuable = false),
-        "Asset is not reissuable"
-      )
+      assertGrpcError(reissue(acc, method, assetId, 100500, reissuable = false, checkStateChanges = false), "Asset is not reissuable")
     }
   }
 
@@ -140,8 +137,8 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
       val initialQuantity = simpleReissuableAsset.quantity
 
       assertGrpcError(
-        reissue(acc, method, assetId, Long.MaxValue - initialQuantity + 1, true),
-        "State check failed. Reason: Asset total value overflow"
+        reissue(acc, method, assetId, Long.MaxValue - initialQuantity + 1, reissuable = true, checkStateChanges = false),
+        "Asset total value overflow"
       )
     }
 
@@ -151,8 +148,8 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
       val assetId = validateIssuedAssets(acc, txIssue, simpleReissuableAsset, method = method)
 
       assertGrpcError(
-        invokeScript(acc, "transferAndBurn", assetId = assetId, count = (simpleReissuableAsset.quantity / 2 + 1).toInt),
-        "State check failed. Reason: Accounts balance errors"
+        invokeScript(acc, "transferAndBurn", assetId = assetId, count = (simpleReissuableAsset.quantity / 2 + 1).toInt, wait = false),
+        "Accounts balance errors"
       )
     }
 
@@ -161,10 +158,7 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
       val txIssue = issue(acc, method, nftAsset, invocationCost(1))
       val assetId = validateIssuedAssets(acc, txIssue, nftAsset, method = method)
 
-      assertGrpcError(
-        reissue(acc, method, assetId, 2, true),
-        "State check failed. Reason: Asset is not reissuable"
-      )
+      assertGrpcError(reissue(acc, method, assetId, 2, reissuable = true, checkStateChanges = false), "Asset is not reissuable")
     }
 
     "Reissuing after setting isReissuiable to falser inside one invocation should produce an error" ignore /* SC-580 */ {
@@ -189,10 +183,7 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
 
     "Issue more than 10 assets should produce an error" in {
       val acc = createDapp(script(simpleNonreissuableAsset))
-      assertGrpcError(
-        invokeScript(acc, "issue11Assets"),
-        "State check failed. Reason: Too many script actions: max: 10, actual: 11"
-      )
+      assertGrpcError(invokeScript(acc, "issue11Assets"), "Too many script actions: max: 10, actual: 11")
     }
 
     "More than 10 actions Issue/Reissue/Burn should produce an error" in {
@@ -200,18 +191,12 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
       val txIssue = issue(acc, method, simpleReissuableAsset, invocationCost(1))
       val assetId = validateIssuedAssets(acc, txIssue, simpleReissuableAsset, method = method)
 
-      assertGrpcError(
-        invokeScript(acc, "process11actions", assetId = assetId),
-        "State check failed. Reason: Too many script actions: max: 10, actual: 11"
-      )
+      assertGrpcError(invokeScript(acc, "process11actions", assetId = assetId), "Too many script actions: max: 10, actual: 11")
     }
 
     "More than 10 issue action in one invocation should produce an error" in {
       val acc = createDapp(script(simpleNonreissuableAsset))
-      assertGrpcError(
-        invokeScript(acc, "issue11Assets", fee = invocationCost(1)),
-        "State check failed. Reason: Too many script actions: max: 10, actual: 11"
-      )
+      assertGrpcError(invokeScript(acc, "issue11Assets", fee = invocationCost(1)), "Too many script actions: max: 10, actual: 11")
     }
   }
 
@@ -238,13 +223,13 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
     }
 
     "Two assets" in {
-      val asset = Asset("test", "name", "description", 10, true, 8, 1)
+      val asset = Asset("test", "name", "description", 10, reissuable = true, 8, 1)
       val acc   = createDapp(script(asset))
 
       val issue1   = issue(acc, CallableMethod, asset)
       val asset1Id = validateIssuedAssets(acc, issue1, asset)
 
-      reissue(acc, CallableMethod, asset1Id, 10, true)
+      reissue(acc, CallableMethod, asset1Id, 10, reissuable = true)
       burn(acc, CallableMethod, asset1Id, 5)
       assertQuantity(asset1Id)(15)
       sender.assertAssetBalance(acc, asset1Id, 15)
@@ -252,19 +237,18 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
       val issue2   = issue(acc, CallableMethod, asset)
       val asset2Id = validateIssuedAssets(acc, issue2, asset)
       burn(acc, CallableMethod, asset2Id, 5)
-      reissue(acc, CallableMethod, asset2Id, 10, false)
-      assertQuantity(asset2Id)(15, false)
+      reissue(acc, CallableMethod, asset2Id, 10, reissuable = false)
+      assertQuantity(asset2Id)(15, reissuable = false)
       sender.assertAssetBalance(acc, asset2Id, 15)
     }
 
-    // TODO NODE-1968
-    "NFT burning removes it from list" ignore {
+    "NFT burning removes it from list" in {
       val acc     = createDapp(script(nftAsset))
       val txIssue = issue(acc, CallableMethod, nftAsset, invocationCost(1))
       val assetId = validateIssuedAssets(acc, txIssue, nftAsset, method = CallableMethod)
-      // sender.nftList(acc, 2).map(_.assetId) shouldBe Seq(assetId)
+      sender.nftList(acc, 2).map(r => Base58.encode(r.assetId.toByteArray)) shouldBe Seq(assetId)
       burn(acc, CallableMethod, assetId, 1)
-      // sender.nftList(acc, 1) shouldBe empty
+      sender.nftList(acc, 1) shouldBe empty
     }
 
     "liquid block works" in {
@@ -279,7 +263,7 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
         }
         assertQuantity(asset)(simpleReissuableAsset.quantity)
         sender.assertAssetBalance(acc, asset, simpleReissuableAsset.quantity)
-        // sender.nftList(acc, 10) should have size 1
+        sender.nftList(acc, 10) should have size 1
       }
       checks()
       miner.waitForHeightArise()
@@ -298,7 +282,7 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
       .explicitGet()
       ._1
 
-    miner.broadcastTransfer(sender.privateKey, PBRecipients.create(address), initialWavesBalance, minFee, waitForTx = true)
+    miner.broadcastTransfer(sender.keyPair, PBRecipients.create(address.toAddress), initialWavesBalance, minFee, waitForTx = true)
 
     miner.waitForTransaction(
       miner
@@ -339,7 +323,7 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
     val tx = miner
       .broadcastInvokeScript(
         address,
-        PBRecipients.create(address),
+        PBRecipients.create(address.toAddress),
         fee = fee,
         waitForTx = wait,
         functionCall = Some(fc),
@@ -444,15 +428,24 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
     }
   }
 
-  def reissue(account: KeyPair, method: String, assetId: String, quantity: Long, reissuable: Boolean, fee: Long = invokeFee): String = {
+  def reissue(
+      account: KeyPair,
+      method: String,
+      assetId: String,
+      quantity: Long,
+      reissuable: Boolean,
+      fee: Long = invokeFee,
+      checkStateChanges: Boolean = true
+  ): String = {
     method match {
       case CallableMethod =>
         val tx = invokeScript(account, "reissueAsset", assetId = assetId, count = quantity, isReissuable = reissuable)
-        assertStateChanges(tx) { sd =>
-          sd.reissues should matchPattern {
-            case Seq(ReissueInfoResponse(`assetId`, `reissuable`, `quantity`)) =>
+        if (checkStateChanges)
+          assertStateChanges(tx) { sd =>
+            sd.reissues should matchPattern {
+              case Seq(ReissueInfoResponse(`assetId`, `reissuable`, `quantity`)) =>
+            }
           }
-        }
         tx
 
       case _ => sender.broadcastReissue(account, fee, assetId, quantity, reissuable, version = TxVersion.V2, waitForTx = true).id
@@ -462,7 +455,7 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
   def burn(account: KeyPair, method: String, assetId: String, quantity: Long, fee: Long = invokeFee): String = {
     method match {
       case CallableMethod =>
-        val tx = invokeScript(account, "burnAsset", assetId = assetId, count = quantity)
+        val tx = invokeScript(account, "burnAsset", assetId = assetId, count = quantity, fee = fee)
         assertStateChanges(tx) { sd =>
           sd.burns should matchPattern {
             case Seq(BurnInfoResponse(`assetId`, `quantity`)) =>
@@ -534,14 +527,14 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
        |@Callable (i) func process11actions(a: ByteVector) = {
        |  [
        |    Issue($issueParams, 0),
-       |    Reissue(a, true, 1000),
+       |    Reissue(a, 1000, true),
        |    Issue($issueParams, 2),
        |    Issue($issueParams, 3),
-       |    Reissue(a, true, 2000),
-       |    Reissue(a, true, 2000),
-       |    Reissue(a, true, 3000),
+       |    Reissue(a, 2000, true),
+       |    Reissue(a, 2000, true),
+       |    Reissue(a, 3000, true),
        |    Burn(a, 6212),
-       |    Reissue(a, true, 2000),
+       |    Reissue(a, 2000, true),
        |    Issue($issueParams, 1),
        |    Burn(a, 12311)
        |  ]
@@ -551,9 +544,9 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
        |
        |@Callable (i) func burnAsset(a: ByteVector, q: Int) = [Burn(a, q)]
        |
-       |@Callable (i) func reissueAsset(a: ByteVector, r: Boolean, q: Int) = [Reissue(a, r, q)]
+       |@Callable (i) func reissueAsset(a: ByteVector, r: Boolean, q: Int) = [Reissue(a, q, r)]
        |
-       |@Callable (i) func reissueAndReissue(a: ByteVector, rq: Int) = [Reissue(a, false, rq), Reissue(a, false, rq)]
+       |@Callable (i) func reissueAndReissue(a: ByteVector, rq: Int) = [Reissue(a, rq, false), Reissue(a, rq, false)]
        |
        |@Callable(i)
        |func transferAndBurn(a: ByteVector, q: Int) = {
@@ -567,7 +560,7 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
        |func reissueIssueAndNft(a: ByteVector) = {
        |  [
        |    Issue($issueParams, ${asset.nonce + 1}),
-       |    Reissue(a, true, 100),
+       |    Reissue(a, 100, true),
        |    Burn(a, 100),
        |    Issue(${createIssueParams(nftAsset)}, 1)
        |  ]
@@ -577,5 +570,4 @@ class GrpcIssueReissueBurnAssetSuite extends FreeSpec with GrpcBaseTransactionSu
        |
        """.stripMargin
   }
-
 }

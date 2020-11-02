@@ -14,11 +14,11 @@ import com.wavesplatform.transaction.smart.SetScriptTransaction
 import com.wavesplatform.transaction.smart.script.ScriptCompiler
 import com.wavesplatform.transaction.{BlockchainUpdater, GenesisTransaction}
 import com.wavesplatform.utils.Time
-import com.wavesplatform.{TransactionGen, WithDB}
+import com.wavesplatform.{EitherMatchers, TransactionGen, WithDB}
 import org.scalacheck.Gen
 import org.scalatest.{FreeSpec, Matchers}
 
-class ScriptCacheTest extends FreeSpec with Matchers with WithDB with TransactionGen {
+class ScriptCacheTest extends FreeSpec with Matchers with WithDB with TransactionGen with EitherMatchers {
 
   val CACHE_SIZE = 1
   val AMOUNT     = 10000000000L
@@ -103,7 +103,7 @@ class ScriptCacheTest extends FreeSpec with Matchers with WithDB with Transactio
 
       withBlockchain(blockGen(scripts, _)) {
         case (List(account), bcu) =>
-          bcu.accountScript(account.toAddress) shouldEqual Some(AccountScriptInfo(account, script, complexity))
+          bcu.accountScript(account.toAddress) shouldEqual Some(AccountScriptInfo(account.publicKey, script, complexity))
 
           val lastBlockHeader = bcu.lastBlockHeader.get
 
@@ -138,12 +138,12 @@ class ScriptCacheTest extends FreeSpec with Matchers with WithDB with Transactio
       ignoreSpendableBalanceChanged,
       TestFunctionalitySettings.Stub
     )
-    val bcu = new BlockchainUpdaterImpl(defaultWriter, ignoreSpendableBalanceChanged, settings, ntpTime, ignoreBlockchainUpdateTriggers)
+    val bcu = new BlockchainUpdaterImpl(defaultWriter, ignoreSpendableBalanceChanged, settings, ntpTime, ignoreBlockchainUpdateTriggers, (_, _) => Seq.empty)
     try {
       val (accounts, blocks) = gen(ntpTime).sample.get
 
       blocks.foreach { block =>
-        bcu.processBlock(block, block.header.generationSignature).explicitGet()
+        bcu.processBlock(block, block.header.generationSignature) should beRight
       }
 
       f(accounts, bcu)

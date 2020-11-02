@@ -17,10 +17,10 @@ case class ReissueTransaction(
     version: TxVersion,
     sender: PublicKey,
     asset: IssuedAsset,
-    quantity: Long,
+    quantity: TxAmount,
     reissuable: Boolean,
-    fee: Long,
-    timestamp: Long,
+    fee: TxAmount,
+    timestamp: TxTimestamp,
     proofs: Proofs,
     chainId: Byte
 ) extends VersionedTransaction
@@ -89,5 +89,5 @@ object ReissueTransaction extends TransactionParser {
       fee: Long,
       timestamp: Long
   ): Either[ValidationError, ReissueTransaction] =
-    signed(version, sender, asset, quantity, reissuable, fee, timestamp, sender)
+    signed(version, sender.publicKey, asset, quantity, reissuable, fee, timestamp, sender.privateKey)
 }

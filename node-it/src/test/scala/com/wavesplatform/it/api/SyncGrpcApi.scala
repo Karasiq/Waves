@@ -4,7 +4,7 @@ import java.util.concurrent.TimeoutException
 
 import com.google.protobuf.ByteString
 import com.google.protobuf.wrappers.StringValue
-import com.wavesplatform.account.KeyPair
+import com.wavesplatform.account.{AddressScheme, KeyPair}
 import com.wavesplatform.api.grpc.BalanceResponse.WavesBalances
 import com.wavesplatform.api.grpc.{TransactionStatus => PBTransactionStatus, _}
 import com.wavesplatform.common.utils.{Base58, EitherExt2}
@@ -23,6 +23,7 @@ import io.grpc.Status.Code
 import io.grpc.StatusRuntimeException
 import org.scalatest.{Assertion, Assertions}
 
+import scala.annotation.tailrec
 import scala.concurrent.duration._
 import scala.concurrent.{Await, Awaitable, Future}
 import scala.util.control.NonFatal
@@ -59,6 +60,7 @@ object SyncGrpcApi extends Assertions {
     import com.wavesplatform.it.api.AsyncGrpcApi.{NodeAsyncGrpcApi => async}
 
     private[this] lazy val accounts     = AccountsApiGrpc.blockingStub(n.grpcChannel)
+    private[this] lazy val assets       = AssetsApiGrpc.blockingStub(n.grpcChannel)
     private[this] lazy val transactions = TransactionsApiGrpc.blockingStub(n.grpcChannel)
     private[this] lazy val blocks       = BlocksApiGrpc.blockingStub(n.grpcChannel)
 
@@ -72,7 +74,7 @@ object SyncGrpcApi extends Assertions {
 
     def resolveAlias(alias: String): Addr = {
       val addr = accounts.resolveAlias(StringValue.of(alias))
-      Addr.fromBytes(addr.value.toByteArray).explicitGet()
+      PBRecipients.toAddress(addr.value.toByteArray, AddressScheme.current.chainId).explicitGet()
     }
 
     def stateChanges(txId: String): (VanillaTransaction, StateChangesDetails) = {
@@ -135,7 +137,7 @@ object SyncGrpcApi extends Assertions {
         version: Int = 2,
         assetId: String = "WAVES",
         feeAssetId: String = "WAVES",
-        attachment: Attachment.Attachment = Attachment.Attachment.Empty,
+        attachment: ByteString = ByteString.EMPTY,
         timestamp: Long = System.currentTimeMillis(),
         waitForTx: Boolean = false
     ): PBSignedTransaction = {
@@ -178,6 +180,10 @@ object SyncGrpcApi extends Assertions {
       balances.map(b => Base58.encode(b.getAsset.assetId.toByteArray) -> b.getAsset.amount).toMap
     }
 
+    def nftList(address: ByteString, limit: Int, after: ByteString = ByteString.EMPTY): Seq[NFTResponse] = {
+      assets.getNFTList(NFTRequest.of(address, limit, after)).toList
+    }
+
     def assertAssetBalance(acc: ByteString, assetIdString: String, balance: Long): Unit = {
       val actual = assetsBalance(acc, Seq(assetIdString)).getOrElse(assetIdString, 0L)
       assert(actual == balance, s"Asset balance mismatch, required=$balance, actual=$actual")
@@ -199,11 +205,31 @@ object SyncGrpcApi extends Assertions {
       transactions.getTransactions(TransactionsRequest(sender, recipient, ids.map(id => ByteString.copyFrom(Base58.decode(id))))).toList
     }
 
-    def waitForTransaction(txId: String, retryInterval: FiniteDuration = 1.second): PBSignedTransaction =
+    def waitForTransaction(txId: String): PBSignedTransaction =
       sync(async(n).waitForTransaction(txId))
 
+    def waitForTxAndHeightArise(txId: String): Unit = {
+      @tailrec
+      def recWait(): Unit = {
+        val Seq(status)   = getStatuses(TransactionsByIdRequest.of(Seq(ByteString.copyFrom(Base58.decode(txId)))))
+        val currentHeight = this.height
+
+        if (status.status.isNotExists) throw new IllegalArgumentException(s"Transaction not exists: $txId")
+        else if (status.status.isConfirmed && currentHeight > status.height) ()
+        else if (status.status.isUnconfirmed) {
+          waitForTransaction(txId)
+          recWait()
+        } else {
+          waitForHeight(status.height.toInt + 1)
+          recWait()
+        }
+      }
+
+      recWait()
+    }
+
     private def maybeWaitForTransaction(tx: PBSignedTransaction, wait: Boolean): PBSignedTransaction = {
-      if (wait) sync(async(n).waitForTransaction(PBTransactions.vanilla(tx).explicitGet().id().toString))
+      if (wait) waitForTxAndHeightArise(tx.id)
       tx
     }
 
@@ -353,17 +379,14 @@ object SyncGrpcApi extends Assertions {
       PBBlocks.vanilla(block).toEither.explicitGet()
     }
 
-    def blockSeq(fromHeight: Int, toHeight: Int): Seq[VanillaBlock] = {
-      val blockIter = blocks.getBlockRange(BlockRangeRequest.of(fromHeight, toHeight, includeTransactions = true, BlockRangeRequest.Filter.Empty))
+    def blockSeq(fromHeight: Int, toHeight: Int, filter: BlockRangeRequest.Filter = BlockRangeRequest.Filter.Empty): Seq[VanillaBlock] = {
+      val blockIter = blocks.getBlockRange(BlockRangeRequest.of(fromHeight, toHeight, includeTransactions = true, filter))
       blockIter.map(blockWithHeight => PBBlocks.vanilla(blockWithHeight.getBlock).toEither.explicitGet()).toSeq
     }
 
     def blockSeqByAddress(address: String, fromHeight: Int, toHeight: Int): Seq[VanillaBlock] = {
-      val blockIter = blocks.getBlockRange(
-        BlockRangeRequest
-          .of(fromHeight, toHeight, includeTransactions = true, BlockRangeRequest.Filter.Generator.apply(ByteString.copyFrom(Base58.decode(address))))
-      )
-      blockIter.map(blockWithHeight => PBBlocks.vanilla(blockWithHeight.getBlock).toEither.explicitGet()).toSeq
+      val filter = BlockRangeRequest.Filter.GeneratorAddress(ByteString.copyFrom(Base58.decode(address)))
+      blockSeq(fromHeight, toHeight, filter)
     }
 
     def getStatuses(request: TransactionsByIdRequest): Seq[PBTransactionStatus] = sync(async(n).getStatuses(request))

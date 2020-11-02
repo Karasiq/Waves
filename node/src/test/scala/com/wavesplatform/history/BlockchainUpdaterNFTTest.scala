@@ -3,7 +3,9 @@ package com.wavesplatform.history
 import com.wavesplatform._
 import com.wavesplatform.account.Address
 import com.wavesplatform.block.{Block, MicroBlock}
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.common.utils.EitherExt2
+import com.wavesplatform.database.{KeyTags, Keys}
 import com.wavesplatform.features.BlockchainFeatures
 import com.wavesplatform.history.Domain.BlockchainUpdaterExt
 import com.wavesplatform.lagonaki.mocks.TestBlock
@@ -25,6 +27,7 @@ class BlockchainUpdaterNFTTest
     with PropertyChecks
     with DomainScenarioDrivenPropertyCheck
     with Matchers
+    with EitherMatchers
     with TransactionGen
     with BlocksTransactionsHelpers
     with NoShrink {
@@ -33,18 +36,18 @@ class BlockchainUpdaterNFTTest
     forAll(Preconditions.nftTransfer()) {
       case (issue, Seq(firstAccount, secondAccount), Seq(genesisBlock, issueBlock, keyBlock, postBlock), Seq(microBlock)) =>
         withDomain(settingsWithFeatures(BlockchainFeatures.NG, BlockchainFeatures.ReduceNFTFee)) { d =>
-          d.blockchainUpdater.processBlock(genesisBlock) shouldBe 'right
-          d.blockchainUpdater.processBlock(issueBlock) shouldBe 'right
-          d.blockchainUpdater.processBlock(keyBlock) shouldBe 'right
+          d.blockchainUpdater.processBlock(genesisBlock) should beRight
+          d.blockchainUpdater.processBlock(issueBlock) should beRight
+          d.blockchainUpdater.processBlock(keyBlock) should beRight
 
           d.nftList(firstAccount).map(_._1.id) shouldBe Seq(issue.id())
           d.nftList(secondAccount) shouldBe Nil
 
-          d.blockchainUpdater.processMicroBlock(microBlock) shouldBe 'right
+          d.blockchainUpdater.processMicroBlock(microBlock) should beRight
           d.nftList(firstAccount) shouldBe Nil
           d.nftList(secondAccount).map(_._1.id) shouldBe Seq(issue.id())
 
-          d.blockchainUpdater.processBlock(postBlock) shouldBe 'right
+          d.blockchainUpdater.processBlock(postBlock) should beRight
           d.nftList(firstAccount) shouldBe Nil
           d.nftList(secondAccount).map(_._1.id) shouldBe Seq(issue.id())
         }
@@ -62,21 +65,52 @@ class BlockchainUpdaterNFTTest
             BlockchainFeatures.Ride4DApps
           )
         ) { d =>
-          d.blockchainUpdater.processBlock(genesisBlock) shouldBe 'right
-          d.blockchainUpdater.processBlock(issueBlock) shouldBe 'right
-          d.blockchainUpdater.processBlock(keyBlock) shouldBe 'right
+          d.blockchainUpdater.processBlock(genesisBlock) should beRight
+          d.blockchainUpdater.processBlock(issueBlock) should beRight
+          d.blockchainUpdater.processBlock(keyBlock) should beRight
 
           d.nftList(firstAccount).map(_._1.id) shouldBe Seq(issue.id())
           d.nftList(secondAccount) shouldBe Nil
 
-          d.blockchainUpdater.processMicroBlock(microBlock) shouldBe 'right
+          d.blockchainUpdater.processMicroBlock(microBlock) should beRight
           d.nftList(firstAccount) shouldBe Nil
           d.nftList(secondAccount).map(_._1.id) shouldBe Seq(issue.id())
 
-          d.blockchainUpdater.processBlock(postBlock) shouldBe 'right
+          d.blockchainUpdater.processBlock(postBlock) should beRight
           d.nftList(firstAccount) shouldBe Nil
           d.nftList(secondAccount).map(_._1.id) shouldBe Seq(issue.id())
         }
+    }
+  }
+
+  property("nft list should be persisted only once independently to using bloom filters") {
+    forAll(Preconditions.nftList()) {
+      case (issue, Seq(firstAccount, secondAccount), Seq(genesisBlock, firstBlock, secondBlock, postBlock)) =>
+        def assert(d: Domain): Assertion = {
+          import com.wavesplatform.database.DBExt
+
+          d.blockchainUpdater.processBlock(genesisBlock) should beRight
+          d.blockchainUpdater.processBlock(firstBlock) should beRight
+          d.blockchainUpdater.processBlock(secondBlock) should beRight
+          d.blockchainUpdater.processBlock(postBlock) should beRight
+
+          d.nftList(firstAccount).map(_._1.id) shouldBe Seq(issue.id())
+          d.nftList(secondAccount) shouldBe Nil
+
+          val persistedNfts = Seq.newBuilder[IssuedAsset]
+          d.db.readOnly { ro =>
+            val addressId = ro.get(Keys.addressId(firstAccount)).get
+            ro.iterateOver(KeyTags.NftPossession.prefixBytes ++ addressId.toByteArray) { e =>
+              persistedNfts += IssuedAsset(ByteStr(e.getKey.takeRight(32)))
+            }
+          }
+
+          persistedNfts.result() shouldBe Seq(IssuedAsset(issue.id()))
+        }
+
+        val settings = settingsWithFeatures(BlockchainFeatures.NG, BlockchainFeatures.ReduceNFTFee)
+        withDomain(settings)(assert)
+        withDomain(settings.copy(dbSettings = settings.dbSettings.copy(useBloomFilter = true)))(assert)
     }
   }
 
@@ -89,11 +123,11 @@ class BlockchainUpdaterNFTTest
         secondAccount <- accountGen
         blockTime = ntpNow
         issue    <- QuickTX.nftIssue(richAccount, Gen.const(blockTime))
-        transfer <- QuickTX.transferAsset(IssuedAsset(issue.assetId), richAccount, secondAccount, 1, Gen.const(blockTime))
+        transfer <- QuickTX.transferAsset(IssuedAsset(issue.assetId), richAccount, secondAccount.toAddress, 1, Gen.const(blockTime))
       } yield {
         val genesisBlock = unsafeBlock(
           reference = randomSig,
-          txs = Seq(GenesisTransaction.create(richAccount, diffs.ENOUGH_AMT, 0).explicitGet()),
+          txs = Seq(GenesisTransaction.create(richAccount.toAddress, diffs.ENOUGH_AMT, 0).explicitGet()),
           signer = TestBlock.defaultSigner,
           version = 3.toByte,
           timestamp = 0
@@ -173,8 +207,8 @@ class BlockchainUpdaterNFTTest
         val genesisBlock = unsafeBlock(
           reference = randomSig,
           txs = Seq(
-            GenesisTransaction.create(richAccount, diffs.ENOUGH_AMT, 0).explicitGet(),
-            GenesisTransaction.create(secondAccount, 1000000, 0).explicitGet()
+            GenesisTransaction.create(richAccount.toAddress, diffs.ENOUGH_AMT, 0).explicitGet(),
+            GenesisTransaction.create(secondAccount.toAddress, 1000000, 0).explicitGet()
           ),
           signer = TestBlock.defaultSigner,
           version = 3,
@@ -207,6 +241,55 @@ class BlockchainUpdaterNFTTest
           blockTime
         )
         (issue, Seq(richAccount.toAddress, secondAccount.toAddress), Seq(genesisBlock, issueBlock, keyBlock, postBlock), microBlocks)
+      }
+    }
+
+    def nftList(): Gen[(IssueTransaction, Seq[Address], Seq[Block])] = {
+      for {
+        firstAccount  <- accountGen
+        secondAccount <- accountGen
+        blockTime = ntpNow
+        issue     <- QuickTX.nftIssue(firstAccount, Gen.const(blockTime))
+        transfer1 <- QuickTX.transferAsset(IssuedAsset(issue.assetId), firstAccount, secondAccount.toAddress, 1, Gen.const(blockTime))
+        transfer2 <- QuickTX.transferAsset(IssuedAsset(issue.assetId), secondAccount, firstAccount.toAddress, 1, Gen.const(blockTime))
+      } yield {
+        val genesisBlock = unsafeBlock(
+          reference = randomSig,
+          txs = Seq(
+            GenesisTransaction.create(firstAccount.toAddress, diffs.ENOUGH_AMT / 2, 0).explicitGet(),
+            GenesisTransaction.create(secondAccount.toAddress, diffs.ENOUGH_AMT / 2, 0).explicitGet(),
+            issue
+          ),
+          signer = TestBlock.defaultSigner,
+          version = 3.toByte,
+          timestamp = blockTime
+        )
+
+        val firstBlock = unsafeBlock(
+          genesisBlock.signature,
+          Seq(transfer1),
+          firstAccount,
+          3.toByte,
+          blockTime
+        )
+
+        val secondBlock = unsafeBlock(
+          firstBlock.signature,
+          Seq(transfer2),
+          firstAccount,
+          3.toByte,
+          blockTime
+        )
+
+        val postBlock = unsafeBlock(
+          secondBlock.signature,
+          Seq.empty,
+          firstAccount,
+          3.toByte,
+          blockTime
+        )
+
+        (issue, Seq(firstAccount.toAddress, secondAccount.toAddress), Seq(genesisBlock, firstBlock, secondBlock, postBlock))
       }
     }
   }

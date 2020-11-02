@@ -6,8 +6,9 @@ import com.wavesplatform.account.KeyPair
 import com.wavesplatform.api.grpc.{ApplicationStatus, TransactionsByIdRequest, TransactionStatus => PBTransactionStatus}
 import com.wavesplatform.api.http.ApiError.TransactionDoesNotExist
 import com.wavesplatform.common.state.ByteStr
-import com.wavesplatform.it.Node
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.it.api.TransactionStatus
+import com.wavesplatform.it.{Node, NodeConfigs}
 import com.wavesplatform.lang.v1.estimator.v3.ScriptEstimatorV3
 import com.wavesplatform.protobuf.transaction.{PBSignedTransaction, PBTransactions}
 import com.wavesplatform.transaction.assets.exchange.{AssetPair, ExchangeTransaction, Order}
@@ -36,9 +37,8 @@ trait FailedTransactionSuiteLike[T] extends ScorexLogging { _: Matchers =>
     val txs                = (1 to maxTxsInMicroBlock * 2).map(i => t(i))
     val priorityTx         = pt()
     waitForEmptyUtx()
-
-    checker(txs, priorityTx) // liquid
     waitForHeightArise()
+    waitForEmptyUtx()
     checker(txs, priorityTx) // hardened
   }
 
@@ -57,12 +57,12 @@ trait FailedTransactionSuiteLike[T] extends ScorexLogging { _: Matchers =>
         (sender.transactionInfo[JsObject](s.id) \ "applicationStatus").asOpt[String] shouldBe s.applicationStatus
       }
 
-      val failed = statuses.dropWhile(s => s.applicationStatus.contains("succeed"))
+      val failed = statuses.dropWhile(s => s.applicationStatus.contains("succeeded"))
       failed.size should be > 0
 
-      all(failed.flatMap(_.applicationStatus)) shouldBe "scriptExecutionFailed"
+      all(failed.flatMap(_.applicationStatus)) shouldBe "script_execution_failed"
 
-      val failedIdsByHeight = failed.groupBy(_.height.get).mapValues(_.map(_.id))
+      val failedIdsByHeight = failed.groupBy(_.height.get).view.mapValues(_.map(_.id))
 
       failedIdsByHeight.foreach {
         case (h, ids) =>
@@ -86,7 +86,7 @@ trait FailedTransactionSuiteLike[T] extends ScorexLogging { _: Matchers =>
     def assertInvalidTxs(txs: Seq[String]): Seq[TransactionStatus] = {
       val statuses = sender.transactionStatus(txs).sortWith { case (f, s) => txs.indexOf(f.id) < txs.indexOf(s.id) }
 
-      val invalid = statuses.dropWhile(s => s.applicationStatus.contains("succeed"))
+      val invalid = statuses.dropWhile(s => s.applicationStatus.contains("succeeded"))
       invalid.size should be > 0
 
       invalid.foreach { s =>
@@ -99,7 +99,7 @@ trait FailedTransactionSuiteLike[T] extends ScorexLogging { _: Matchers =>
       invalid
     }
 
-    def updateAssetScript(result: Boolean, asset: String, owner: String, fee: Long): String = {
+    def updateAssetScript(result: Boolean, asset: String, owner: KeyPair, fee: Long, waitForTx: Boolean = true): String = {
       sender
         .setAssetScript(
           asset,
@@ -110,24 +110,25 @@ trait FailedTransactionSuiteLike[T] extends ScorexLogging { _: Matchers =>
               .compile(
                 s"""
                    |match tx {
-                   |  case tx: SetAssetScriptTransaction => true
-                   |  case _ => $result
+                   |  case _: SetAssetScriptTransaction => true
+                   |  case _ =>
+                   |    let check = ${"sigVerify(base58'', base58'', base58'') ||" * 16} false
+                   |    if (check) then false else $result
                    |}
                    |""".stripMargin,
                 ScriptEstimatorV3
               )
-              .right
-              .get
+              .explicitGet()
               ._1
               .bytes()
               .base64
           ),
-          waitForTx = true
+          waitForTx = waitForTx
         )
         .id
     }
 
-    def updateAccountScript(result: Option[Boolean], account: String, fee: Long): String = {
+    def updateAccountScript(result: Option[Boolean], account: KeyPair, fee: Long, waitForTx: Boolean = true): String = {
       sender
         .setScript(
           account,
@@ -140,21 +141,22 @@ trait FailedTransactionSuiteLike[T] extends ScorexLogging { _: Matchers =>
                    |{-# SCRIPT_TYPE ACCOUNT #-}
                    |
                    |match (tx) {
-                   |  case t: SetScriptTransaction => true
-                   |  case _ => $r
+                   |  case _: SetScriptTransaction => true
+                   |  case _ =>
+                   |    let check = ${"sigVerify(base58'', base58'', base58'') ||" * 16} false
+                   |    if (check) then false else $r
                    |}
                    |""".stripMargin,
                 ScriptEstimatorV3
               )
-              .right
-              .get
+              .explicitGet()
               ._1
               .bytes()
               .base64
 
           },
           fee = fee,
-          waitForTx = true
+          waitForTx = waitForTx
         )
         .id
     }
@@ -179,7 +181,7 @@ trait FailedTransactionSuiteLike[T] extends ScorexLogging { _: Matchers =>
       failed.size should be > 0
       all(failed.map(_.applicationStatus)) shouldBe ApplicationStatus.SCRIPT_EXECUTION_FAILED
 
-      val failedIdsByHeight = failed.groupBy(_.height.toInt).mapValues(_.map(_.id))
+      val failedIdsByHeight = failed.groupBy(_.height.toInt).view.mapValues(_.map(_.id))
 
       failedIdsByHeight.foreach {
         case (h, ids) =>
@@ -205,31 +207,35 @@ trait FailedTransactionSuiteLike[T] extends ScorexLogging { _: Matchers =>
       invalid
     }
 
-    def updateAssetScript(result: Boolean, asset: String, owner: KeyPair, fee: Long): PBSignedTransaction = {
+    def updateAssetScript(result: Boolean, asset: String, owner: KeyPair, fee: Long, waitForTx: Boolean = true): PBSignedTransaction = {
       sender
         .setAssetScript(
           owner,
           asset,
           Right(
-            ScriptCompiler
-              .compile(
-                s"""
+            Some(
+              ScriptCompiler
+                .compile(
+                  s"""
                    |match tx {
-                   |  case tx: SetAssetScriptTransaction => true
-                   |  case _ => $result
+                   |  case _: SetAssetScriptTransaction => true
+                   |  case _ =>
+                   |    let check = ${"sigVerify(base58'', base58'', base58'') ||" * 16} false
+                   |    if (check) then false else $result
                    |}
                    |""".stripMargin,
-                ScriptEstimatorV3
-              )
-              .toOption
-              .map(_._1)
+                  ScriptEstimatorV3
+                )
+                .explicitGet()
+                ._1
+            )
           ),
           fee,
-          waitForTx = true
+          waitForTx = waitForTx
         )
     }
 
-    def updateAccountScript(result: Option[Boolean], account: KeyPair, fee: Long): PBSignedTransaction = {
+    def updateAccountScript(result: Option[Boolean], account: KeyPair, fee: Long, waitForTx: Boolean = true): PBSignedTransaction = {
       sender
         .setScript(
           account,
@@ -243,7 +249,7 @@ trait FailedTransactionSuiteLike[T] extends ScorexLogging { _: Matchers =>
                    |{-# SCRIPT_TYPE ACCOUNT #-}
                    |
                    |match (tx) {
-                   |  case t: SetScriptTransaction => true
+                   |  case _: SetScriptTransaction => true
                    |  case _ => $r
                    |}
                    |""".stripMargin,
@@ -253,8 +259,7 @@ trait FailedTransactionSuiteLike[T] extends ScorexLogging { _: Matchers =>
                 .map(_._1)
             }
           ),
-          fee = fee,
-          waitForTx = true
+          fee = fee
         )
     }
   }
@@ -281,12 +286,12 @@ object FailedTransactionSuiteLike {
     val ts   = System.currentTimeMillis()
     val bmfa = Asset.fromString(Some(buyMatcherFeeAsset))
     val smfa = Asset.fromString(Some(sellMatcherFeeAsset))
-    val buy  = Order.buy(Order.V4, buyer, matcher, assetPair, 100, 100, ts, ts + Order.MaxLiveTime, buyMatcherFee, bmfa)
-    val sell = Order.sell(Order.V4, seller, matcher, assetPair, 100, 100, ts, ts + Order.MaxLiveTime, sellMatcherFee, smfa)
+    val buy  = Order.buy(Order.V4, buyer, matcher.publicKey, assetPair, 100, 100, ts, ts + Order.MaxLiveTime, buyMatcherFee, bmfa)
+    val sell = Order.sell(Order.V4, seller, matcher.publicKey, assetPair, 100, 100, ts, ts + Order.MaxLiveTime, sellMatcherFee, smfa)
     ExchangeTransaction
       .signed(
         TxVersion.V3,
-        matcher,
+        matcher.privateKey,
         buy,
         sell,
         buy.amount,
@@ -296,11 +301,19 @@ object FailedTransactionSuiteLike {
         fee,
         ts
       )
-      .right
-      .get
+      .explicitGet()
   }
 
   val configForMinMicroblockAge: Config = ConfigFactory.parseString(s"""
      |waves.miner.min-micro-block-age = 7
+     |waves.miner.max-transactions-in-micro-block = 1
      |""".stripMargin)
+
+  val Configs: Seq[Config] =
+    NodeConfigs.newBuilder
+      .overrideBase(_.quorum(0))
+      .overrideBase(_.raw(s"waves.miner.max-transactions-in-micro-block = 50"))
+      .withDefault(1)
+      .withSpecial(_.nonMiner)
+      .buildNonConflicting()
 }

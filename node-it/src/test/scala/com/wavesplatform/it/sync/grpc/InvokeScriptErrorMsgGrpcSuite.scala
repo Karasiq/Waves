@@ -82,8 +82,7 @@ class InvokeScriptErrorMsgGrpcSuite extends GrpcBaseTransactionSuite {
         payments = payments,
         fee = 1300000
       ),
-      "Fee in WAVES for InvokeScriptTransaction .* with 12 total scripts invoked does not exceed minimal value",
-      Code.INVALID_ARGUMENT
+      "Fee in WAVES for InvokeScriptTransaction .* with 12 total scripts invoked does not exceed minimal value"
     )
   }
 

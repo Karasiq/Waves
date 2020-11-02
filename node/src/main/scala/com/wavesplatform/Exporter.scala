@@ -72,10 +72,9 @@ object Exporter extends ScorexLogging {
           case Failure(ex) => log.error(s"Failed to create file '$outputFilename': $ex")
         }
 
-        Await.result(Kamon.stopAllReporters(), 10.seconds)
-        time.close()
-        Await.ready(Kamon.stopAllReporters(), 20.seconds)
+        Try(Await.result(Kamon.stopModules(), 10.seconds))
         Metrics.shutdown()
+        time.close()
     }
   }
 
@@ -149,10 +148,18 @@ object Exporter extends ScorexLogging {
       opt[String]('o', "output-prefix")
         .text("Output file name prefix")
         .action((p, c) => c.copy(outputFileNamePrefix = p)),
+      opt[Int]('h', "height")
+        .text("Export to height")
+        .action((h, c) => c.copy(exportHeight = Some(h)))
+        .validate(h => if (h > 0) success else failure("Export height must be > 0")),
       opt[String]('f', "format")
+        .hidden()
         .text("Output file format")
         .valueName(s"<${Formats.list.mkString("|")}> (default is ${Formats.default})")
-        .action((f, c) => c.copy(format = f))
+        .action { (f, c) =>
+          log.warn("Export file format option is deprecated and will be removed eventually")
+          c.copy(format = f)
+        }
         .validate {
           case f if Formats.isSupported(f.toUpperCase) => success
           case f                                       => failure(s"Unsupported format: $f")

@@ -1,6 +1,7 @@
 package com.wavesplatform.it.sync.smartcontract
 
 import com.typesafe.config.{Config, ConfigFactory}
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.it.NodeConfigs
 import com.wavesplatform.it.api.SyncHttpApi._
@@ -21,8 +22,8 @@ class Ride4DAppsActivationTestSuite extends BaseTransactionSuite with CancelAfte
 
   override protected def nodeConfigs: Seq[Config] = configWithRide4DAppsFeature
 
-  private val smartAcc  = firstAddress
-  private val callerAcc = secondAddress
+  private def smartAcc  = firstKeyPair
+  private def callerAcc = secondKeyPair
 
   private val scriptV3 = ScriptCompiler
     .compile(
@@ -54,8 +55,8 @@ class Ride4DAppsActivationTestSuite extends BaseTransactionSuite with CancelAfte
   test("send waves to accounts") {
     sender
       .transfer(
-        sender.address,
-        recipient = smartAcc,
+        sender.keyPair,
+        recipient = smartAcc.toAddress.toString,
         assetId = None,
         amount = 5.waves,
         fee = minFee,
@@ -65,8 +66,8 @@ class Ride4DAppsActivationTestSuite extends BaseTransactionSuite with CancelAfte
 
     sender
       .transfer(
-        sender.address,
-        recipient = callerAcc,
+        sender.keyPair,
+        recipient = callerAcc.toAddress.toString,
         assetId = None,
         amount = 5.waves,
         fee = minFee,
@@ -88,7 +89,7 @@ class Ride4DAppsActivationTestSuite extends BaseTransactionSuite with CancelAfte
 
   test("can't invoke script before Ride4DApps activation") {
     assertBadRequestAndMessage(
-      sender.invokeScript(callerAcc, smartAcc, Some("foo"), List.empty, Seq.empty, smartMinFee, None),
+      sender.invokeScript(callerAcc, smartAcc.toAddress.toString, Some("foo"), List.empty, Seq.empty, smartMinFee, None),
       "RIDE 4 DAPPS feature has not been activated yet"
     )
   }
@@ -112,7 +113,7 @@ class Ride4DAppsActivationTestSuite extends BaseTransactionSuite with CancelAfte
   test("can't set script with user function to asset before Ride4DApps activation") {
     assertBadRequestAndMessage(
       sender.setAssetScript(
-        Asset.IssuedAsset("Test".getBytes("UTF-8")).id.toString,
+        Asset.IssuedAsset(ByteStr("Test".getBytes("UTF-8"))).id.toString,
         smartAcc,
         issueFee,
         Some(scriptV2)
@@ -158,7 +159,7 @@ class Ride4DAppsActivationTestSuite extends BaseTransactionSuite with CancelAfte
     sender
       .invokeScript(
         callerAcc,
-        smartAcc,
+        smartAcc.toAddress.toString,
         Some("doAction"),
         List.empty,
         Seq.empty,

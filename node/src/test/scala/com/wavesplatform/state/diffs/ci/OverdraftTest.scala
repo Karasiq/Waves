@@ -49,7 +49,7 @@ class OverdraftTest extends PropSpec with PropertyChecks with Matchers with Tran
           if (activation) r should produce("AccountBalanceError")
           else
             r should produce(
-              s"Fee in WAVES for InvokeScriptTransaction (1 in WAVES) with 0 total scripts invoked does not exceed minimal value of $InvokeFee WAVES"
+              s"Fee in WAVES for InvokeScriptTransaction (1 in WAVES) does not exceed minimal value of $InvokeFee WAVES"
             )
         }
     }
@@ -65,7 +65,7 @@ class OverdraftTest extends PropSpec with PropertyChecks with Matchers with Tran
       case (genesis, setDApp, ci, activation) =>
         assertDiffEi(Seq(TestBlock.create(genesis :+ setDApp)), TestBlock.create(Seq(ci)), features(activation)) { r =>
           if (activation) r should produce("AccountBalanceError")
-          else r shouldBe 'right
+          else r.explicitGet()
         }
     }
   }
@@ -126,14 +126,14 @@ class OverdraftTest extends PropSpec with PropertyChecks with Matchers with Tran
       val fee = if (withEnoughFee) InvokeFee else 1
       val (payment, invokerBalance) =
         if (withPayment)
-          (List(Payment(issue.quantity, IssuedAsset(issue.id.value()))), IssueFee)
+          (List(Payment(issue.quantity, IssuedAsset(issue.id()))), IssueFee)
         else
           (Nil, 0L)
       for {
-        genesis  <- GenesisTransaction.create(master, ENOUGH_AMT, ts)
-        genesis2 <- GenesisTransaction.create(invoker, invokerBalance, ts)
+        genesis  <- GenesisTransaction.create(master.toAddress, ENOUGH_AMT, ts)
+        genesis2 <- GenesisTransaction.create(invoker.toAddress, invokerBalance, ts)
         setDApp  <- SetScriptTransaction.selfSigned(1.toByte, master, Some(dApp), SetScriptFee, ts + 2)
-        ci       <- InvokeScriptTransaction.selfSigned(1.toByte, invoker, master, None, payment, fee, Waves, ts + 3)
+        ci       <- InvokeScriptTransaction.selfSigned(1.toByte, invoker, master.toAddress, None, payment, fee, Waves, ts + 3)
       } yield (List(genesis, genesis2), setDApp, ci, issue)
     }.explicitGet()
 
@@ -147,12 +147,12 @@ class OverdraftTest extends PropSpec with PropertyChecks with Matchers with Tran
       issue   <- issueV2TransactionGen(invoker, Gen.const(None), feeParam = Some(IssueFee))
     } yield {
       val count    = ContractLimits.MaxAttachedPaymentAmount
-      val payments = (1 to count).map(_ => Payment(issue.quantity / count + 1, IssuedAsset(issue.id.value())))
+      val payments = (1 to count).map(_ => Payment(issue.quantity / count + 1, IssuedAsset(issue.id())))
       for {
-        genesis  <- GenesisTransaction.create(master, ENOUGH_AMT, ts)
-        genesis2 <- GenesisTransaction.create(invoker, ENOUGH_AMT, ts)
+        genesis  <- GenesisTransaction.create(master.toAddress, ENOUGH_AMT, ts)
+        genesis2 <- GenesisTransaction.create(invoker.toAddress, ENOUGH_AMT, ts)
         setDApp  <- SetScriptTransaction.selfSigned(1.toByte, master, Some(payingAssetDApp(version, issue.assetId)), SetScriptFee, ts + 2)
-        ci       <- InvokeScriptTransaction.selfSigned(1.toByte, invoker, master, None, payments, InvokeFee, Waves, ts + 3)
+        ci       <- InvokeScriptTransaction.selfSigned(1.toByte, invoker, master.toAddress, None, payments, InvokeFee, Waves, ts + 3)
       } yield (List(genesis, genesis2), setDApp, ci, issue)
     }.explicitGet()
 

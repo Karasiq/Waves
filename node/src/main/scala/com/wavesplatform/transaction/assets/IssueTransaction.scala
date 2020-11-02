@@ -20,12 +20,12 @@ case class IssueTransaction(
     sender: PublicKey,
     name: ByteString,
     description: ByteString,
-    quantity: Long,
+    quantity: TxAmount,
     decimals: Byte,
     reissuable: Boolean,
     script: Option[Script],
-    fee: Long,
-    timestamp: Long,
+    fee: TxAmount,
+    timestamp: TxTimestamp,
     proofs: Proofs,
     chainId: Byte
 ) extends VersionedTransaction
@@ -147,7 +147,7 @@ object IssueTransaction extends TransactionParser {
       fee: Long,
       timestamp: Long
   ): Either[ValidationError, IssueTransaction] =
-    signed(version, sender, name, description, quantity, decimals, reissuable, script, fee, timestamp, sender)
+    signed(version, sender.publicKey, name, description, quantity, decimals, reissuable, script, fee, timestamp, sender.privateKey)
 
   override def parseBytes(bytes: Array[TxType]): Try[IssueTransaction] = serializer.parseBytes(bytes)
 

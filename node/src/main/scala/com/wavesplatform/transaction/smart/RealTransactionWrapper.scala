@@ -4,10 +4,11 @@ import cats.implicits._
 import com.wavesplatform.account.{Address, AddressOrAlias, Alias}
 import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.lang.ExecutionError
-import com.wavesplatform.lang.directives.values.{StdLibVersion, _}
+import com.wavesplatform.lang.directives.values.StdLibVersion
 import com.wavesplatform.lang.v1.compiler.Terms.EVALUATED
 import com.wavesplatform.lang.v1.traits.domain.Tx.{Header, Proven}
 import com.wavesplatform.lang.v1.traits.domain._
+import com.wavesplatform.protobuf.ByteStringExt
 import com.wavesplatform.state._
 import com.wavesplatform.transaction._
 import com.wavesplatform.transaction.assets._
@@ -27,19 +28,19 @@ object RealTransactionWrapper {
   private def proven(tx: ProvenTransaction, txIdOpt: Option[ByteStr] = None): Proven =
     Proven(
       header(tx, txIdOpt),
-      Recipient.Address(ByteStr(tx.sender.bytes.arr)),
+      Recipient.Address(ByteStr(tx.sender.toAddress.bytes)),
       ByteStr(tx.bodyBytes()),
-      ByteStr(tx.sender),
+      tx.sender,
       tx.proofs.proofs.map(_.arr).map(ByteStr(_)).toIndexedSeq
     )
 
   implicit def assetPair(a: AssetPair): APair = APair(a.amountAsset.compatId, a.priceAsset.compatId)
   implicit def ord(o: Order): Ord =
     Ord(
-      id = ByteStr(o.id.value.arr),
-      sender = Recipient.Address(ByteStr(o.sender.bytes.arr)),
-      senderPublicKey = ByteStr(o.senderPublicKey),
-      matcherPublicKey = ByteStr(o.matcherPublicKey),
+      id = o.id(),
+      sender = Recipient.Address(ByteStr(o.sender.toAddress.bytes)),
+      senderPublicKey = o.senderPublicKey,
+      matcherPublicKey = o.matcherPublicKey,
       assetPair = o.assetPair,
       orderType = o.orderType match {
         case BUY  => OrdType.Buy
@@ -56,7 +57,7 @@ object RealTransactionWrapper {
     )
 
   implicit def aoaToRecipient(aoa: AddressOrAlias): Recipient = aoa match {
-    case a: Address => Recipient.Address(ByteStr(a.bytes.arr))
+    case a: Address => Recipient.Address(ByteStr(a.bytes))
     case a: Alias   => Recipient.Alias(a.name)
   }
 
@@ -68,9 +69,18 @@ object RealTransactionWrapper {
   ): Either[ExecutionError, Tx] =
     tx match {
       case g: GenesisTransaction  => Tx.Genesis(header(g), g.amount, g.recipient).asRight
-      case t: TransferTransaction => mapTransferTx(t, stdLibVersion).asRight
+      case t: TransferTransaction => mapTransferTx(t).asRight
       case i: IssueTransaction =>
-        Tx.Issue(proven(i), i.quantity, i.name.toByteArray, i.description.toByteArray, i.reissuable, i.decimals, i.script.map(_.bytes())).asRight
+        Tx.Issue(
+            proven(i),
+            i.quantity,
+            i.name.toByteStr,
+            i.description.toByteStr,
+            i.reissuable,
+            i.decimals,
+            i.script.map(_.bytes())
+          )
+          .asRight
       case r: ReissueTransaction     => Tx.ReIssue(proven(r), r.quantity, r.asset.id, r.reissuable).asRight
       case b: BurnTransaction        => Tx.Burn(proven(b), b.quantity, b.asset.id).asRight
       case b: LeaseTransaction       => Tx.Lease(proven(b), b.amount, b.recipient).asRight
@@ -83,7 +93,7 @@ object RealTransactionWrapper {
             transferCount = ms.transfers.length,
             totalAmount = ms.transfers.map(_.amount).sum,
             transfers = ms.transfers.map(r => com.wavesplatform.lang.v1.traits.domain.Tx.TransferItem(r.address, r.amount)).toIndexedSeq,
-            attachment = convertAttachment(ms.attachment, stdLibVersion)
+            attachment = ms.attachment
           )
           .asRight
       case ss: SetScriptTransaction      => Tx.SetScript(proven(ss), ss.script.map(_.bytes())).asRight
@@ -121,24 +131,14 @@ object RealTransactionWrapper {
         Tx.UpdateAssetInfo(proven(u), u.assetId.id, u.name, u.description).asRight
     }
 
-  def mapTransferTx(t: TransferTransaction, version: StdLibVersion): Tx.Transfer =
+  def mapTransferTx(t: TransferTransaction): Tx.Transfer =
     Tx.Transfer(
       proven(t),
       feeAssetId = t.feeAssetId.compatId,
       assetId = t.assetId.compatId,
       amount = t.amount,
       recipient = t.recipient,
-      attachment = convertAttachment(t.attachment, version)
+      attachment = t.attachment
     )
 
-  private def convertAttachment(attachment: Option[Attachment], version: StdLibVersion): TransferAttachment = version match {
-    case V1 | V2 | V3 => ByteStrValue(attachment.toBytes)
-    case V4 =>
-      attachment.fold[TransferAttachment](EmptyAttachment) {
-        case Attachment.Num(value)  => IntValue(value)
-        case Attachment.Bool(value) => BooleanValue(value)
-        case Attachment.Bin(value)  => ByteStrValue(value)
-        case Attachment.Str(value)  => StringValue(value)
-      }
-  }
 }

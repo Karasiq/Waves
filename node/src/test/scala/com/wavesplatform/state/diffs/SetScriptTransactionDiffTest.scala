@@ -23,7 +23,6 @@ import com.wavesplatform.protobuf.dapp.DAppMeta
 import com.wavesplatform.settings.{FunctionalitySettings, TestFunctionalitySettings}
 import com.wavesplatform.transaction.GenesisTransaction
 import com.wavesplatform.transaction.smart.SetScriptTransaction
-import com.wavesplatform.transaction.smart.script.ScriptCompiler
 import com.wavesplatform.{NoShrink, TransactionGen}
 import org.scalacheck.Gen
 import org.scalatest.PropSpec
@@ -38,7 +37,7 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
   val preconditionsAndSetScript: Gen[(GenesisTransaction, SetScriptTransaction)] = for {
     master <- accountGen
     ts     <- timestampGen
-    genesis: GenesisTransaction = GenesisTransaction.create(master, ENOUGH_AMT, ts).explicitGet()
+    genesis: GenesisTransaction = GenesisTransaction.create(master.toAddress, ENOUGH_AMT, ts).explicitGet()
     fee    <- smallFeeGen
     script <- Gen.option(scriptGen)
   } yield (genesis, SetScriptTransaction.selfSigned(1.toByte, master, script, fee, ts).explicitGet())
@@ -63,7 +62,7 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
       version <- Gen.oneOf(SetScriptTransaction.supportedVersions.toSeq)
       master  <- accountGen
       ts      <- timestampGen
-      genesis: GenesisTransaction = GenesisTransaction.create(master, ENOUGH_AMT, ts).explicitGet()
+      genesis: GenesisTransaction = GenesisTransaction.create(master.toAddress, ENOUGH_AMT, ts).explicitGet()
       fee <- smallFeeGen
     } yield (genesis, SetScriptTransaction.selfSigned(1.toByte, master, Some(script), fee, ts).explicitGet())
 
@@ -72,7 +71,7 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
       case (genesis, setScript) =>
         assertDiffAndState(Seq(TestBlock.create(Seq(genesis))), TestBlock.create(Seq(setScript)), fs) {
           case (blockDiff, newState) =>
-            newState.accountScript(setScript.sender).map(_.script) shouldBe setScript.script
+            newState.accountScript(setScript.sender.toAddress).map(_.script) shouldBe setScript.script
         }
     }
   }
@@ -82,7 +81,7 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
       case (genesis, setScript) =>
         assertDiffAndState(Seq(TestBlock.create(Seq(genesis))), TestBlock.create(Seq(setScript)), fs) {
           case (blockDiff, newState) =>
-            newState.accountScript(setScript.sender).map(_.script) shouldBe setScript.script
+            newState.accountScript(setScript.sender.toAddress).map(_.script) shouldBe setScript.script
         }
     }
   }
@@ -103,7 +102,7 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
     val setup = for {
       master <- accountGen
       ts     <- positiveLongGen
-      genesis = GenesisTransaction.create(master, ENOUGH_AMT, ts).explicitGet()
+      genesis = GenesisTransaction.create(master.toAddress, ENOUGH_AMT, ts).explicitGet()
       expr    = BLOCK(LET("x", CONST_LONG(3)), CONST_BOOLEAN(true))
       script  = ExprScript(V1, expr, checkSize = false).explicitGet()
       tx      = SetScriptTransaction.selfSigned(1.toByte, master, Some(script), 100000, ts + 1).explicitGet()
@@ -116,16 +115,16 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
         }
 
         assertDiffEi(Seq(block(Seq(genesis))), block(Seq(tx)), settingsActivated) { blockDiffEi =>
-          blockDiffEi shouldBe 'right
+          blockDiffEi.explicitGet()
         }
     }
   }
 
   property("verifier complexity limit 3000 from V4") {
-    val exprV3WithComplexityBetween3000And4000 = {
+    val exprV3WithComplexityBetween2000And3000 = {
       val ctx = {
         val directives = DirectiveSet(V3, Account, Expression).explicitGet()
-        PureContext.build(Global, V3).withEnvironment[Environment] |+|
+        PureContext.build(V3).withEnvironment[Environment] |+|
           CryptoContext.build(Global, V3).withEnvironment[Environment] |+|
           WavesContext.build(directives)
       }
@@ -142,9 +141,6 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
         | rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') &&
         | rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') &&
         | rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') &&
-        | rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') &&
-        | rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') &&
-        | rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') &&
         | rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK')
       """.stripMargin
 
@@ -152,10 +148,10 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
       ExprScript(V3, expr).explicitGet()
     }
 
-    val contractV3WithComplexityBetween3000And4000 = {
+    val contractV3WithComplexityBetween2000And3000 = {
       val ctx = {
         val directives = DirectiveSet(V3, Account, DAppType).explicitGet()
-        PureContext.build(Global, V3).withEnvironment[Environment] |+|
+        PureContext.build(V3).withEnvironment[Environment] |+|
           CryptoContext.build(Global, V3).withEnvironment[Environment] |+|
           WavesContext.build(directives)
       }
@@ -174,9 +170,6 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
           |   rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') &&
           |   rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') &&
           |   rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') &&
-          |   rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') &&
-          |   rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') &&
-          |   rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') &&
           |   rsaVerify(SHA256, base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK')
       """.stripMargin
 
@@ -184,10 +177,10 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
       ContractScript(V3, dApp).explicitGet()
     }
 
-    val exprV4WithComplexityBetween3000And4000 = {
+    val exprV4WithComplexityBetween2000And3000 = {
       val ctx = {
         val directives = DirectiveSet(V4, Account, Expression).explicitGet()
-        PureContext.build(Global, V4).withEnvironment[Environment] |+|
+        PureContext.build(V4).withEnvironment[Environment] |+|
           CryptoContext.build(Global, V4).withEnvironment[Environment] |+|
           WavesContext.build(directives)
       }
@@ -198,17 +191,17 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
         | {-#SCRIPT_TYPE ACCOUNT #-}
         | {-#CONTENT_TYPE EXPRESSION #-}
         |
-        | groth16Verify_15inputs(base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') || groth16Verify_1inputs(base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK')
+        | groth16Verify_5inputs(base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') || groth16Verify_1inputs(base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK')
       """.stripMargin
 
       val expr = ExpressionCompiler.compile(script, ctx.compilerContext).explicitGet()
       ExprScript(V4, expr).explicitGet()
     }
 
-    val contractV4WithComplexityBetween3000And4000 = {
+    val contractV4WithComplexityBetween2000And3000 = {
       val ctx = {
         val directives = DirectiveSet(V4, Account, DAppType).explicitGet()
-        PureContext.build(Global, V4).withEnvironment[Environment] |+|
+        PureContext.build(V4).withEnvironment[Environment] |+|
           CryptoContext.build(Global, V4).withEnvironment[Environment] |+|
           WavesContext.build(directives)
       }
@@ -221,7 +214,7 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
         |
         | @Verifier(tx)
         | func verify() =
-        |   groth16Verify_15inputs(base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') || groth16Verify_1inputs(base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK')
+        |   groth16Verify_5inputs(base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK') || groth16Verify_1inputs(base64'ZGdnZHMK',base64'ZGdnZHMK',base64'ZGdnZHMK')
         |
       """.stripMargin
 
@@ -232,7 +225,7 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
     val contractV4WithCallableComplexityBetween3000And4000 = {
       val ctx = {
         val directives = DirectiveSet(V4, Account, DAppType).explicitGet()
-        PureContext.build(Global, V4).withEnvironment[Environment] |+|
+        PureContext.build(V4).withEnvironment[Environment] |+|
           CryptoContext.build(Global, V4).withEnvironment[Environment] |+|
           WavesContext.build(directives)
       }
@@ -272,8 +265,8 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
       forAll(preconditionsAndSetCustomContract(script)) {
         case (genesis, setScript) =>
           assertDiffAndState(Seq(TestBlock.create(Seq(genesis))), TestBlock.create(Seq(setScript)), settings) {
-            case (blockDiff, newState) =>
-              newState.accountScript(setScript.sender).map(_.script) shouldBe setScript.script
+            case (_, newState) =>
+              newState.accountScript(setScript.sender.toAddress).map(_.script) shouldBe setScript.script
           }
       }
     }
@@ -287,25 +280,13 @@ class SetScriptTransactionDiffTest extends PropSpec with PropertyChecks with Tra
       }
     }
 
-    forAll(preconditionsAndSetCustomContract(exprV4WithComplexityBetween3000And4000)) {
-      case (genesis, setScript) =>
-        assertDiffEi(Seq(TestBlock.create(Seq(genesis))), TestBlock.create(Seq(setScript)), rideV4Activated)(
-          _ should produce("Script is too complex: 3807 > 3000")
-        )
-    }
+    assertSuccess(exprV3WithComplexityBetween2000And3000,     rideV3Activated)
+    assertSuccess(contractV3WithComplexityBetween2000And3000, rideV3Activated)
 
-    forAll(preconditionsAndSetCustomContract(contractV4WithComplexityBetween3000And4000)) {
-      case (genesis, setScript) =>
-        assertDiffEi(Seq(TestBlock.create(Seq(genesis))), TestBlock.create(Seq(setScript)), rideV4Activated)(
-          _ should produce("Contract verifier is too complex: 3807 > 3000")
-        )
-    }
-
-    assertSuccess(exprV3WithComplexityBetween3000And4000, rideV3Activated)
-    assertSuccess(contractV3WithComplexityBetween3000And4000, rideV3Activated)
-
-    assertFailure(exprV3WithComplexityBetween3000And4000, rideV4Activated, "Script is too complex: 3049 > 3000")
-    assertFailure(contractV3WithComplexityBetween3000And4000, rideV4Activated, "Contract verifier is too complex: 3049 > 3000")
+    assertFailure(exprV3WithComplexityBetween2000And3000,     rideV4Activated, "Script is too complex: 2134 > 2000")
+    assertFailure(exprV4WithComplexityBetween2000And3000,     rideV4Activated, "Script is too complex: 2807 > 2000")
+    assertFailure(contractV3WithComplexityBetween2000And3000, rideV4Activated, "Contract verifier is too complex: 2134 > 2000")
+    assertFailure(contractV4WithComplexityBetween2000And3000, rideV4Activated, "Contract verifier is too complex: 2807 > 2000")
 
     assertSuccess(contractV4WithCallableComplexityBetween3000And4000, rideV4Activated)
   }

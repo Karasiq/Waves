@@ -2,6 +2,7 @@ package com.wavesplatform.it.sync
 
 import com.typesafe.config.Config
 import com.wavesplatform.account.KeyPair
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.common.utils._
 import com.wavesplatform.it._
 import com.wavesplatform.it.api.AsyncHttpApi._
@@ -31,9 +32,7 @@ class NFTBalanceSuite extends FreeSpec with BaseTransactionSuiteLike {
       .withSpecial(_.nonMiner)
       .buildNonConflicting()
 
-  override protected def nodes: Seq[Node] = theNodes()
-
-  private val node: Node = nodes.head
+  private def node: Node = nodes.head
 
   private val issuer: KeyPair = KeyPair("issuer#1".getBytes)
 
@@ -47,7 +46,7 @@ class NFTBalanceSuite extends FreeSpec with BaseTransactionSuiteLike {
     val fundAndIssue =
       for {
         _      <- traverse(nodes)(_.waitForHeight(2))
-        fundTx <- node.transfer(node.address, issuer.stringRepr, 1000.waves, 0.001.waves)
+        fundTx <- node.transfer(node.address, issuer.toAddress.toString, 1000.waves, 0.001.waves)
         _      <- node.waitForTransaction(fundTx.id)
         _ <- Future.sequence((simple ++ nft) map { tx =>
           for {
@@ -65,7 +64,7 @@ class NFTBalanceSuite extends FreeSpec with BaseTransactionSuiteLike {
       val expectedIds = simple map (_.assetId.toString)
 
       val assertion =
-        getPortfolio(node, issuer.stringRepr) map { ids =>
+        getPortfolio(node, issuer.toAddress.toString) map { ids =>
           ids.toSet shouldBe expectedIds.toSet
         }
 
@@ -76,7 +75,7 @@ class NFTBalanceSuite extends FreeSpec with BaseTransactionSuiteLike {
       val expectedIds = nft.map(_.assetId.toString)
 
       val assertion =
-        getNFTPage(node, issuer.stringRepr, 1000, None) map { ids =>
+        getNFTPage(node, issuer.toAddress.toString, 1000, None) map { ids =>
           ids.toSet shouldBe expectedIds.toSet
         }
 
@@ -87,15 +86,15 @@ class NFTBalanceSuite extends FreeSpec with BaseTransactionSuiteLike {
       val other = KeyPair("other".getBytes)
 
       val transfer = TransferTransaction
-        .selfSigned(1.toByte, issuer, other, randomTokenToTransfer, 1, Waves, 0.001.waves, None, System.currentTimeMillis())
+        .selfSigned(1.toByte, issuer, other.toAddress, randomTokenToTransfer, 1, Waves, 0.001.waves, ByteStr.empty, System.currentTimeMillis())
         .explicitGet()
 
       val assertion = for {
         tx         <- node.signedBroadcast(transfer.json())
         _          <- node.waitForTransaction(tx.id)
         _          <- node.waitForHeightArise
-        issuerNFTs <- getNFTPage(node, issuer.stringRepr, 1000, None)
-        otherNFTs  <- getNFTPage(node, other.stringRepr, 1000, None)
+        issuerNFTs <- getNFTPage(node, issuer.toAddress.toString, 1000, None)
+        otherNFTs  <- getNFTPage(node, other.toAddress.toString, 1000, None)
       } yield {
         issuerNFTs shouldNot contain(randomTokenToTransfer.id.toString)
         otherNFTs should contain(randomTokenToTransfer.id.toString)
@@ -113,8 +112,8 @@ class NFTBalanceSuite extends FreeSpec with BaseTransactionSuiteLike {
         .toSet
 
       val assertion = for {
-        pagedIds    <- getNFTPaged(node, issuer.stringRepr, 10).map(_.toSet)
-        nonPagedIds <- getNFTPage(node, issuer.stringRepr, 1000, None).map(_.toSet)
+        pagedIds    <- getNFTPaged(node, issuer.toAddress.toString, 10).map(_.toSet)
+        nonPagedIds <- getNFTPage(node, issuer.toAddress.toString, 1000, None).map(_.toSet)
       } yield {
         pagedIds shouldBe expectedIds
         nonPagedIds shouldBe expectedIds
@@ -127,7 +126,7 @@ class NFTBalanceSuite extends FreeSpec with BaseTransactionSuiteLike {
     }
 
     "returns error on wrong limit" in {
-      val assertion = getNFTPage(node, issuer.stringRepr, 10000000, None)
+      val assertion = getNFTPage(node, issuer.toAddress.toString, 10000000, None)
         .map(_ => org.scalatest.Assertions.fail("BadRequest expected"))
         .recoverWith {
           case ex: Throwable =>
@@ -140,7 +139,7 @@ class NFTBalanceSuite extends FreeSpec with BaseTransactionSuiteLike {
     }
 
     "returns error on wrong base58 in after" in {
-      val assertion = getNFTPage(node, issuer.stringRepr, 100, Some("wr0ngbase58str1ng"))
+      val assertion = getNFTPage(node, issuer.toAddress.toString, 100, Some("wr0ngbase58str1ng"))
         .map(_ => org.scalatest.Assertions.fail("BadRequest expected"))
         .recoverWith {
           case ex: Throwable =>
@@ -163,7 +162,7 @@ object NFTBalanceSuite {
     val simpleAssets = List.fill[IssueTransaction](simple) {
       IssueTransaction(
         TxVersion.V1,
-        issuer,
+        issuer.publicKey,
         "SimpleAsset".utf8Bytes,
         s"Simple Test Asset ${Random.nextInt(1000)}".utf8Bytes,
         1000,
@@ -172,13 +171,13 @@ object NFTBalanceSuite {
         script = None,
         1.waves,
         System.currentTimeMillis()
-      ).signWith(issuer)
+      ).signWith(issuer.privateKey)
     }
 
     val nonFungibleAssets = List.fill[IssueTransaction](nft) {
       IssueTransaction(
         TxVersion.V1,
-        issuer,
+        issuer.publicKey,
         "NonFungibleAsset".utf8Bytes,
         s"NFT Test Asset ${Random.nextInt(1000)}".utf8Bytes,
         1,
@@ -187,7 +186,7 @@ object NFTBalanceSuite {
         script = None,
         1.waves,
         System.currentTimeMillis()
-      ).signWith(issuer)
+      ).signWith(issuer.privateKey)
     }
 
     (simpleAssets, nonFungibleAssets)

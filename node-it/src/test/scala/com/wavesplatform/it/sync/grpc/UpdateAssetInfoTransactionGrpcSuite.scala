@@ -1,7 +1,7 @@
 package com.wavesplatform.it.sync.grpc
 
 import com.typesafe.config.{Config, ConfigFactory}
-import com.wavesplatform.common.utils.{Base58, EitherExt2}
+import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.it.NodeConfigs.Miners
 import com.wavesplatform.it.api.SyncGrpcApi._
 import com.wavesplatform.it.sync._
@@ -16,7 +16,7 @@ import scala.util.Random
 
 class UpdateAssetInfoTransactionGrpcSuite extends GrpcBaseTransactionSuite with TableDrivenPropertyChecks {
   import UpdateAssetInfoTransactionGrpcSuite._
-  val updateInterval                              = 2
+  val updateInterval                              = 5
   override protected def nodeConfigs: Seq[Config] = Seq(configWithUpdateIntervalSetting(updateInterval).withFallback(Miners.head))
 
   val issuer      = firstAcc
@@ -27,39 +27,38 @@ class UpdateAssetInfoTransactionGrpcSuite extends GrpcBaseTransactionSuite with 
   protected override def beforeAll(): Unit = {
     super.beforeAll()
 
-    assetId = Base58.encode(
-      PBTransactions
-        .vanilla(
-          sender.broadcastIssue(
-            issuer,
-            "asset",
-            someAssetAmount,
-            8,
-            reissuable = true,
-            script = Right(None),
-            fee = issueFee,
-            description = "description",
-            version = 1,
-            waitForTx = true
-          )
+    assetId = PBTransactions
+      .vanilla(
+        sender.broadcastIssue(
+          issuer,
+          "asset",
+          someAssetAmount,
+          8,
+          reissuable = true,
+          script = Right(None),
+          fee = issueFee,
+          description = "description",
+          version = 1,
+          waitForTx = true
         )
-        .explicitGet()
-        .id()
-    )
+      )
+      .explicitGet()
+      .id()
+      .toString
     issueHeight = sender.height
   }
 
   test("able to update name/description of issued asset") {
     val nextTerm = issueHeight + updateInterval + 1
-    sender.waitForHeight(nextTerm)
-    val updateAssetInfoTxId = Base58.encode(
+    sender.waitForHeight(nextTerm, 2.minutes)
+    val updateAssetInfoTxId =
       PBTransactions
         .vanilla(
           sender.updateAssetInfo(issuer, assetId, "updatedName", "updatedDescription", minFee)
         )
         .explicitGet()
         .id()
-    )
+        .toString
     sender.waitForTransaction(updateAssetInfoTxId)
 
     sender.assetInfo(assetId).name shouldBe "updatedName"
@@ -67,13 +66,12 @@ class UpdateAssetInfoTransactionGrpcSuite extends GrpcBaseTransactionSuite with 
   }
 
   test("not able to update name/description more than once within interval") {
-    val nextTermEnd = issueHeight + 2 * updateInterval
     assertGrpcError(
       sender.updateAssetInfo(issuer, assetId, "updatedName", "updatedDescription", minFee),
       s"Can't update info of asset with id=$assetId",
       Code.INVALID_ARGUMENT
     )
-    sender.waitForHeight(nextTermEnd)
+    sender.waitForHeight(sender.height + updateInterval / 2, 2.minutes)
 
     assertGrpcError(
       sender.updateAssetInfo(issuer, assetId, "updatedName", "updatedDescription", minFee),
@@ -138,7 +136,7 @@ class UpdateAssetInfoTransactionGrpcSuite extends GrpcBaseTransactionSuite with 
   test("check increased fee for smart sender/asset") {
     val scriptText = s"""true""".stripMargin
     val script     = ScriptCompiler(scriptText, isAssetScript = true, ScriptEstimatorV2).explicitGet()._1
-    val smartAssetId = Base58.encode(
+    val smartAssetId =
       PBTransactions
         .vanilla(
           sender.broadcastIssue(
@@ -155,7 +153,7 @@ class UpdateAssetInfoTransactionGrpcSuite extends GrpcBaseTransactionSuite with 
         )
         .explicitGet()
         .id()
-    )
+        .toString
     sender.waitForHeight(sender.height + updateInterval + 1, 3.minutes)
     assertGrpcError(
       sender.updateAssetInfo(issuer, smartAssetId, "updatedName", "updatedDescription", minFee + smartFee - 1),
@@ -177,14 +175,9 @@ class UpdateAssetInfoTransactionGrpcSuite extends GrpcBaseTransactionSuite with 
 object UpdateAssetInfoTransactionGrpcSuite {
   private def configWithUpdateIntervalSetting(interval: Long) =
     ConfigFactory.parseString(
-      s"""
-         |waves {
-         |   blockchain.custom {
-         |      functionality {
-         |        min-asset-info-update-interval = $interval
-         |      }
-         |   }
-         |   miner.quorum = 0
+      s"""waves {
+         |  blockchain.custom.functionality.min-asset-info-update-interval = $interval
+         |  miner.quorum = 0
          |}""".stripMargin
     )
 }

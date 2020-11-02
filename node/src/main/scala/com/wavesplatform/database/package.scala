@@ -7,7 +7,7 @@ import java.util.{Map => JMap}
 import com.google.common.base.Charsets.UTF_8
 import com.google.common.io.ByteStreams.{newDataInput, newDataOutput}
 import com.google.common.io.{ByteArrayDataInput, ByteArrayDataOutput}
-import com.google.common.primitives.{Bytes, Ints, Longs, Shorts}
+import com.google.common.primitives.{Bytes, Ints, Longs}
 import com.google.protobuf.{ByteString, CodedInputStream, WireFormat}
 import com.wavesplatform.account.PublicKey
 import com.wavesplatform.api.BlockMeta
@@ -19,17 +19,21 @@ import com.wavesplatform.crypto._
 import com.wavesplatform.database.protobuf.DataEntry.Value
 import com.wavesplatform.database.{protobuf => pb}
 import com.wavesplatform.lang.script.{Script, ScriptReader}
+import com.wavesplatform.protobuf.ByteStringExt
 import com.wavesplatform.protobuf.block.PBBlocks
-import com.wavesplatform.protobuf.transaction.{PBSignedTransaction, PBTransactions}
+import com.wavesplatform.protobuf.transaction.PBTransactions
+import com.wavesplatform.state.StateHash.SectionId
 import com.wavesplatform.state._
 import com.wavesplatform.transaction.Asset.IssuedAsset
-import com.wavesplatform.transaction.transfer.TransferTransaction
+import com.wavesplatform.transaction.lease.LeaseTransaction
 import com.wavesplatform.transaction.{GenesisTransaction, LegacyPBSwitch, PaymentTransaction, Transaction, TransactionParsers, TxValidationError}
 import com.wavesplatform.utils.{ScorexLogging, _}
-import io.estatico.newtype.macros.newtype
 import monix.eval.Task
 import monix.reactive.Observable
 import org.iq80.leveldb._
+import supertagged.TaggedType
+
+import scala.collection.mutable
 
 package object database extends ScorexLogging {
   def openDB(path: String, recreate: Boolean = false): DB = {
@@ -106,6 +110,19 @@ package object database extends ScorexLogging {
   def writeAddressIds(values: Seq[AddressId]): Array[Byte] =
     values.foldLeft(ByteBuffer.allocate(values.length * java.lang.Long.BYTES)) { case (buf, aid) => buf.putLong(aid.toLong) }.array()
 
+  def readAssetIds(data: Array[Byte]): Seq[ByteStr] = Option(data).fold(Seq.empty[ByteStr]) { d =>
+    require(d.length % transaction.AssetIdLength == 0, s"Invalid data length: ${d.length}")
+    val buffer = ByteBuffer.wrap(d)
+    Seq.fill(d.length / transaction.AssetIdLength) {
+      val idBytes = new Array[Byte](transaction.AssetIdLength)
+      buffer.get(idBytes)
+      ByteStr(idBytes)
+    }
+  }
+
+  def writeAssetIds(values: Seq[ByteStr]): Array[Byte] =
+    values.foldLeft(ByteBuffer.allocate(values.length * transaction.AssetIdLength)) { case (buf, ai) => buf.put(ai.arr) }.array()
+
   def readTxIds(data: Array[Byte]): List[ByteStr] = Option(data).fold(List.empty[ByteStr]) { d =>
     val b   = ByteBuffer.wrap(d)
     val ids = List.newBuilder[ByteStr]
@@ -139,21 +156,22 @@ package object database extends ScorexLogging {
     val s = Seq.newBuilder[String]
 
     while (i < data.length) {
-      val len = Shorts.fromByteArray(data.drop(i))
+      val len = ((data(i) << 8) | (data(i + 1) & 0xFF)).toShort // Optimization
       s += new String(data, i + 2, len, UTF_8)
       i += (2 + len)
     }
     s.result()
   }
 
-  def writeStrings(strings: Seq[String]): Array[Byte] =
-    strings
-      .foldLeft(ByteBuffer.allocate(strings.map(_.utf8Bytes.length + 2).sum)) {
-        case (b, s) =>
-          val bytes = s.utf8Bytes
-          b.putShort(bytes.length.toShort).put(bytes)
+  def writeStrings(strings: Seq[String]): Array[Byte] = {
+    val utfBytes = strings.toVector.map(_.utf8Bytes)
+    utfBytes
+      .foldLeft(ByteBuffer.allocate(utfBytes.map(_.length + 2).sum)) {
+        case (buf, bytes) =>
+          buf.putShort(bytes.length.toShort).put(bytes)
       }
       .array()
+  }
 
   def writeLeaseBalance(lb: LeaseBalance): Array[Byte] = {
     val ndo = newDataOutput()
@@ -276,7 +294,7 @@ package object database extends ScorexLogging {
   def readAssetStaticInfo(bb: Array[Byte]): AssetStaticInfo = {
     val sai = pb.StaticAssetInfo.parseFrom(bb)
     AssetStaticInfo(
-      TransactionId(ByteStr(sai.sourceId.toByteArray)),
+      TransactionId(sai.sourceId.toByteStr),
       PublicKey(sai.issuerPublicKey.toByteArray),
       sai.decimals,
       sai.isNft
@@ -286,29 +304,29 @@ package object database extends ScorexLogging {
   def writeBlockMeta(data: BlockMeta): Array[Byte] =
     pb.BlockMeta(
         Some(PBBlocks.protobuf(data.header)),
-        ByteString.copyFrom(data.signature),
-        data.headerHash.fold(ByteString.EMPTY)(hh => ByteString.copyFrom(hh)),
+        ByteString.copyFrom(data.signature.arr),
+        data.headerHash.fold(ByteString.EMPTY)(hh => ByteString.copyFrom(hh.arr)),
         data.height,
         data.size,
         data.transactionCount,
         data.totalFeeInWaves,
         data.reward.getOrElse(-1L),
-        data.vrf.fold(ByteString.EMPTY)(vrf => ByteString.copyFrom(vrf))
+        data.vrf.fold(ByteString.EMPTY)(vrf => ByteString.copyFrom(vrf.arr))
       )
       .toByteArray
 
-  def readBlockMeta(height: Int)(bs: Array[Byte]): BlockMeta = {
+  def readBlockMeta(bs: Array[Byte]): BlockMeta = {
     val pbbm = pb.BlockMeta.parseFrom(bs)
     BlockMeta(
       PBBlocks.vanilla(pbbm.header.get),
-      ByteStr(pbbm.signature.toByteArray),
-      Option(pbbm.headerHash).collect { case bs if !bs.isEmpty => ByteStr(bs.toByteArray) },
+      pbbm.signature.toByteStr,
+      Option(pbbm.headerHash).collect { case bs if !bs.isEmpty => bs.toByteStr },
       pbbm.height,
       pbbm.size,
       pbbm.transactionCount,
       pbbm.totalFeeInWaves,
       Option(pbbm.reward).filter(_ >= 0),
-      Option(pbbm.vrf).collect { case bs if !bs.isEmpty => ByteStr(bs.toByteArray) }
+      Option(pbbm.vrf).collect { case bs if !bs.isEmpty => bs.toByteStr }
     )
   }
 
@@ -342,22 +360,27 @@ package object database extends ScorexLogging {
     ndo.toByteArray
   }
 
-  def readTransactionHN(bs: Array[Byte]): (Height, TxNum) = {
+  def readStateHash(bs: Array[Byte]): StateHash = {
     val ndi = newDataInput(bs)
-    val h   = Height(ndi.readInt())
-    val num = TxNum(ndi.readShort())
-
-    (h, num)
+    val sectionsCount = ndi.readByte()
+    val sections = (0 until sectionsCount).map { _ =>
+      val sectionId = ndi.readByte()
+      val value = ndi.readByteStr(DigestLength)
+      SectionId(sectionId) -> value
+    }
+    val totalHash = ndi.readByteStr(DigestLength)
+    StateHash(totalHash, sections.toMap)
   }
 
-  def writeTransactionHN(v: (Height, TxNum)): Array[Byte] = {
-    val ndo = newDataOutput(8)
-
-    val (h, num) = v
-
-    ndo.writeInt(h)
-    ndo.writeShort(num)
-
+  def writeStateHash(sh: StateHash): Array[Byte] = {
+    val sorted = sh.sectionHashes.toSeq.sortBy(_._1)
+    val ndo = newDataOutput(crypto.DigestLength + 1 + sorted.length * (1 + crypto.DigestLength))
+    ndo.writeByte(sorted.length)
+    sorted.foreach { case (sectionId, value) =>
+      ndo.writeByte(sectionId.id.toByte)
+      ndo.writeByteStr(value.ensuring(_.arr.length == DigestLength))
+    }
+    ndo.writeByteStr(sh.totalHash.ensuring(_.arr.length == DigestLength))
     ndo.toByteArray
   }
 
@@ -366,7 +389,7 @@ package object database extends ScorexLogging {
       case Value.Empty              => EmptyDataEntry(key)
       case Value.IntValue(value)    => IntegerDataEntry(key, value)
       case Value.BoolValue(value)   => BooleanDataEntry(key, value)
-      case Value.BinaryValue(value) => BinaryDataEntry(key, ByteStr(value.toByteArray))
+      case Value.BinaryValue(value) => BinaryDataEntry(key, value.toByteStr)
       case Value.StringValue(value) => StringDataEntry(key, value)
     }
 
@@ -443,17 +466,17 @@ package object database extends ScorexLogging {
   def createBlock(header: BlockHeader, signature: ByteStr, txs: Seq[Transaction]): Either[TxValidationError.GenericError, Block] =
     Validators.validateBlock(Block(header, signature, txs))
 
-  def writeAssetScript(script: (Script, Long)): Array[Byte] =
-    Longs.toByteArray(script._2) ++ script._1.bytes().arr
+  def writeAssetScript(script: AssetScriptInfo): Array[Byte] =
+    Longs.toByteArray(script.complexity) ++ script.script.bytes().arr
 
-  def readAssetScript(b: Array[Byte]): (Script, Long) =
-    ScriptReader.fromBytes(b.drop(8)).explicitGet() -> Longs.fromByteArray(b)
+  def readAssetScript(b: Array[Byte]): AssetScriptInfo =
+    AssetScriptInfo(ScriptReader.fromBytes(b.drop(8)).explicitGet(), Longs.fromByteArray(b))
 
   def writeAccountScriptInfo(scriptInfo: AccountScriptInfo): Array[Byte] =
     pb.AccountScriptInfo.toByteArray(
       pb.AccountScriptInfo(
         ByteString.copyFrom(scriptInfo.publicKey.arr),
-        ByteString.copyFrom(scriptInfo.script.bytes()),
+        ByteString.copyFrom(scriptInfo.script.bytes().arr),
         scriptInfo.verifierComplexity,
         scriptInfo.complexitiesByEstimator.map {
           case (version, complexities) =>
@@ -487,14 +510,14 @@ package object database extends ScorexLogging {
 
   def writeTransaction(v: (Transaction, Boolean)): Array[Byte] = {
     import pb.TransactionData.Transaction._
-    val (tx, succeed) = v
+    val (tx, succeeded) = v
     val ptx = tx match {
       case lps: LegacyPBSwitch if !lps.isProtobufVersion => LegacyBytes(ByteString.copyFrom(tx.bytes()))
       case _: GenesisTransaction                         => LegacyBytes(ByteString.copyFrom(tx.bytes()))
       case _: PaymentTransaction                         => LegacyBytes(ByteString.copyFrom(tx.bytes()))
       case _                                             => NewTransaction(PBTransactions.protobuf(tx))
     }
-    pb.TransactionData(!succeed, ptx).toByteArray
+    pb.TransactionData(!succeeded, ptx).toByteArray
   }
 
   /** Returns status (succeed - true, failed -false) and bytes (left - legacy format bytes, right - new format bytes) */
@@ -531,11 +554,11 @@ package object database extends ScorexLogging {
     (succeed, bytes)
   }
 
-  def readTransferTransaction(b: Array[Byte]): Option[TransferTransaction] =
-    readTransactionBytes(b) match {
-      case (true, Left(oldBytes)) => TransferTransaction.parseBytes(oldBytes).toOption
-      case (true, Right(bytes))   => PBTransactions.vanilla(PBSignedTransaction.parseFrom(bytes)).toOption.collect { case t: TransferTransaction => t }
-      case _                      => None
+  def loadTransactions(height: Height, db: ReadOnlyDB): Option[Seq[(Transaction, Boolean)]] =
+    for {
+      meta <- db.get(Keys.blockMetaAt(height))
+    } yield (0 until meta.transactionCount).toList.flatMap { n =>
+      db.get(Keys.transactionAt(height, TxNum(n.toShort)))
     }
 
   def loadBlock(height: Height, db: ReadOnlyDB): Option[Block] =
@@ -572,12 +595,42 @@ package object database extends ScorexLogging {
       staticInfo.nft
     )
 
-  @newtype case class AddressId(toLong: Long) {
-    def toByteArray: Array[Byte] = toLong.toByteArray
+  def loadActiveLeases(db: DB, fromHeight: Int, toHeight: Int): Seq[LeaseTransaction] = db.withResource { r =>
+    val leaseIds = mutable.Set.empty[ByteStr]
+    val iterator = r.iterator
+
+    @inline
+    def keyInRange(): Boolean = {
+      val actualKey = iterator.peekNext().getKey
+      actualKey.startsWith(KeyTags.LeaseStatus.prefixBytes) && Ints.fromByteArray(actualKey.slice(2, 6)) <= toHeight
+    }
+
+    iterator.seek(KeyTags.LeaseStatus.prefixBytes ++ Ints.toByteArray(fromHeight))
+    while (iterator.hasNext && keyInRange()) {
+      val e       = iterator.next()
+      val leaseId = ByteStr(e.getKey.drop(6))
+      if (Option(e.getValue).exists(_(0) == 1)) leaseIds += leaseId else leaseIds -= leaseId
+    }
+
+    (for {
+      id          <- leaseIds
+      leaseStatus <- fromHistory(r, Keys.leaseStatusHistory(id), Keys.leaseStatus(id))
+      if leaseStatus
+      pb.TransactionMeta(h, n, _, _) <- r.get(Keys.transactionMetaById(TransactionId(id)))
+      tx                             <- r.get(Keys.transactionAt(Height(h), TxNum(n.toShort)))
+    } yield tx).collect {
+      case (lt: LeaseTransaction, true) => lt
+    }.toSeq
   }
 
-  object AddressId {
-    def fromByteArray(bs: Array[Byte]): AddressId = AddressId(Longs.fromByteArray(bs))
+  object AddressId extends TaggedType[Long] {
+    def fromByteArray(bs: Array[Byte]): Type = AddressId(Longs.fromByteArray(bs))
+  }
+
+  type AddressId = AddressId.Type
+
+  implicit final class Ops(private val value: AddressId) extends AnyVal {
+    def toByteArray: Array[Byte] = Longs.toByteArray(AddressId.raw(value))
   }
 
   implicit class LongExt(val l: Long) extends AnyVal {

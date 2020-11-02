@@ -5,9 +5,9 @@ import com.wavesplatform.account.{AddressOrAlias, PublicKey}
 import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.lang.ValidationError
 import com.wavesplatform.lang.script.ScriptReader
+import com.wavesplatform.lang.v1.compiler.Terms
 import com.wavesplatform.lang.v1.compiler.Terms.FUNCTION_CALL
-import com.wavesplatform.protobuf.Amount
-import com.wavesplatform.protobuf.transaction.Attachment.Attachment.{BinaryValue, BoolValue, IntValue, StringValue}
+import com.wavesplatform.protobuf._
 import com.wavesplatform.protobuf.transaction.Transaction.Data
 import com.wavesplatform.serialization.Deser
 import com.wavesplatform.state.{BinaryDataEntry, BooleanDataEntry, EmptyDataEntry, IntegerDataEntry, StringDataEntry}
@@ -26,8 +26,14 @@ import scala.util.Try
 object PBTransactions {
   import com.wavesplatform.protobuf.utils.PBImplicitConversions._
 
+  def createGenesis(chainId: Byte, timestamp: Long, signature: ByteStr, data: GenesisTransactionData): SignedTransaction =
+    new SignedTransaction(
+      Some(Transaction(chainId, timestamp = timestamp, data = Data.Genesis(data))),
+      Seq(ByteString.copyFrom(signature.arr))
+    )
+
   def create(
-      sender: com.wavesplatform.account.PublicKey = PublicKey.empty,
+      sender: com.wavesplatform.account.PublicKey,
       chainId: Byte = 0,
       fee: Long = 0L,
       feeAssetId: VanillaAssetId = Waves,
@@ -35,12 +41,11 @@ object PBTransactions {
       version: Int = 0,
       proofsArray: Seq[com.wavesplatform.common.state.ByteStr] = Nil,
       data: com.wavesplatform.protobuf.transaction.Transaction.Data = com.wavesplatform.protobuf.transaction.Transaction.Data.Empty
-  ): SignedTransaction = {
+  ): SignedTransaction =
     new SignedTransaction(
-      Some(Transaction(chainId, sender: ByteStr, Some((feeAssetId, fee): Amount), timestamp, version, data)),
+      Some(Transaction(chainId, sender.toByteString, Some((feeAssetId, fee): Amount), timestamp, version, data)),
       proofsArray.map(bs => ByteString.copyFrom(bs.arr))
     )
-  }
 
   def vanillaUnsafe(signedTx: PBSignedTransaction): VanillaTransaction = {
     import com.wavesplatform.common.utils._
@@ -53,10 +58,13 @@ object PBTransactions {
   def vanilla(signedTx: PBSignedTransaction, unsafe: Boolean = false): Either[ValidationError, VanillaTransaction] = {
     for {
       parsedTx <- signedTx.transaction.toRight(GenericError("Transaction must be specified"))
-      fee      <- parsedTx.fee.toRight(GenericError("Fee must be specified"))
-      _        <- Either.cond(parsedTx.data.isDefined, (), GenericError("Transaction data must be specified"))
+      fee = parsedTx.fee.getOrElse(Amount.defaultInstance)
+      _ <- Either.cond(parsedTx.data.isDefined, (), GenericError("Transaction data must be specified"))
       feeAmount = PBAmounts.toAssetAndAmount(fee)
-      sender    = PublicKey(parsedTx.senderPublicKey.toByteArray)
+      sender = Option(parsedTx.senderPublicKey)
+        .filterNot(_.isEmpty)
+        .map(pk => PublicKey(pk.toByteArray))
+        .orNull
       tx <- if (unsafe)
         Right(
           createVanillaUnsafe(
@@ -66,7 +74,7 @@ object PBTransactions {
             feeAmount._2,
             feeAmount._1,
             parsedTx.timestamp,
-            Proofs(signedTx.proofs.map(bs => ByteStr(bs.toByteArray))),
+            Proofs(signedTx.proofs.map(_.toByteStr)),
             parsedTx.data
           )
         )
@@ -78,7 +86,7 @@ object PBTransactions {
           feeAmount._2,
           feeAmount._1,
           parsedTx.timestamp,
-          Proofs(signedTx.proofs.map(bs => ByteStr(bs.toByteArray))),
+          Proofs(signedTx.proofs.map(_.toByteStr)),
           parsedTx.data
         )
     } yield tx
@@ -99,13 +107,13 @@ object PBTransactions {
     val result: Either[ValidationError, VanillaTransaction] = data match {
       case Data.Genesis(GenesisTransactionData(recipient, amount)) =>
         for {
-          addr <- PBRecipients.toAddress(recipient, chainId)
+          addr <- PBRecipients.toAddress(recipient.toByteArray, chainId)
           tx   <- vt.GenesisTransaction.create(addr, amount, timestamp)
         } yield tx
 
       case Data.Payment(PaymentTransactionData(recipient, amount)) =>
         for {
-          addr <- PBRecipients.toAddress(recipient, chainId)
+          addr <- PBRecipients.toAddress(recipient.toByteArray, chainId)
           tx   <- vt.PaymentTransaction.create(sender, addr, amount, feeAmount, timestamp, signature)
         } yield tx
 
@@ -120,7 +128,7 @@ object PBTransactions {
             amount.longAmount,
             feeAssetId,
             feeAmount,
-            toVanillaAttachment(attachment),
+            attachment.toByteStr,
             timestamp,
             proofs
           )
@@ -148,16 +156,26 @@ object PBTransactions {
         )
 
       case Data.Reissue(ReissueTransactionData(Some(Amount(assetId, amount)), reissuable)) =>
-        vt.assets.ReissueTransaction.create(version.toByte, sender, IssuedAsset(assetId), amount, reissuable, feeAmount, timestamp, proofs, chainId)
+        vt.assets.ReissueTransaction.create(
+          version.toByte,
+          sender,
+          IssuedAsset(assetId.toByteStr),
+          amount,
+          reissuable,
+          feeAmount,
+          timestamp,
+          proofs,
+          chainId
+        )
 
       case Data.Burn(BurnTransactionData(Some(Amount(assetId, amount)))) =>
-        vt.assets.BurnTransaction.create(version.toByte, sender, IssuedAsset(assetId), amount, feeAmount, timestamp, proofs, chainId)
+        vt.assets.BurnTransaction.create(version.toByte, sender, IssuedAsset(assetId.toByteStr), amount, feeAmount, timestamp, proofs, chainId)
 
       case Data.SetAssetScript(SetAssetScriptTransactionData(assetId, script)) =>
         vt.assets.SetAssetScriptTransaction.create(
           version.toByte,
           sender,
-          IssuedAsset(assetId),
+          IssuedAsset(assetId.toByteStr),
           toVanillaScript(script),
           feeAmount,
           timestamp,
@@ -183,7 +201,7 @@ object PBTransactions {
         } yield tx
 
       case Data.LeaseCancel(LeaseCancelTransactionData(leaseId)) =>
-        vt.lease.LeaseCancelTransaction.create(version.toByte, sender, leaseId.toByteArray, feeAmount, timestamp, proofs, chainId)
+        vt.lease.LeaseCancelTransaction.create(version.toByte, sender, leaseId.toByteStr, feeAmount, timestamp, proofs, chainId)
 
       case Data.Exchange(ExchangeTransactionData(amount, price, buyMatcherFee, sellMatcherFee, Seq(order1, order2))) =>
         vt.assets.exchange.ExchangeTransaction.create(
@@ -211,7 +229,7 @@ object PBTransactions {
           mt.transfers.flatMap(t => t.getRecipient.toAddressOrAlias(chainId).toOption.map(ParsedTransfer(_, t.amount))).toList,
           feeAmount,
           timestamp,
-          toVanillaAttachment(mt.attachment),
+          mt.attachment.toByteStr,
           proofs,
           chainId
         )
@@ -220,7 +238,7 @@ object PBTransactions {
         vt.assets.SponsorFeeTransaction.create(
           version.toByte,
           sender,
-          IssuedAsset(assetId),
+          IssuedAsset(assetId.toByteStr),
           Option(minFee).filter(_ > 0),
           feeAmount,
           timestamp,
@@ -229,24 +247,25 @@ object PBTransactions {
         )
 
       case Data.InvokeScript(InvokeScriptTransactionData(Some(dappAddress), functionCall, payments)) =>
-        import com.wavesplatform.common.utils._
+        import cats.instances.either._
+        import cats.instances.option._
+        import cats.syntax.traverse._
         import com.wavesplatform.lang.v1.Serde
         import com.wavesplatform.lang.v1.compiler.Terms.FUNCTION_CALL
 
         for {
           dApp <- PBRecipients.toAddressOrAlias(dappAddress, chainId)
 
-          desFCOpt = Deser.parseOption(functionCall.asReadOnlyByteBuffer())(Serde.deserialize)
+          fcOpt <- Deser
+            .parseOption(functionCall.asReadOnlyByteBuffer())(Serde.deserialize)
+            .sequence
+            .left
+            .map(e => GenericError(s"Invalid InvokeScript function call: $e"))
 
-          _ <- Either.cond(
-            desFCOpt.isEmpty || desFCOpt.get.isRight,
-            (),
-            GenericError(s"Invalid InvokeScript function call: ${desFCOpt.get.left.get}")
-          )
-
-          fcOpt = desFCOpt.map(_.explicitGet())
-
-          _ <- Either.cond(fcOpt.isEmpty || fcOpt.exists(_.isInstanceOf[FUNCTION_CALL]), (), GenericError(s"Not a function call: $fcOpt"))
+          _ <- fcOpt match {
+            case None | Some(Terms.FUNCTION_CALL(_, _)) => Right(())
+            case Some(expr)                             => Left(GenericError(s"Not a function call: $expr"))
+          }
 
           tx <- vt.smart.InvokeScriptTransaction.create(
             version.toByte,
@@ -265,7 +284,7 @@ object PBTransactions {
         UpdateAssetInfoTransaction.create(
           version.toByte,
           sender,
-          assetId,
+          assetId.toByteStr,
           name,
           description,
           timestamp,
@@ -297,10 +316,18 @@ object PBTransactions {
     val signature = proofs.toSignature
     data match {
       case Data.Genesis(GenesisTransactionData(recipient, amount)) =>
-        vt.GenesisTransaction(PBRecipients.toAddress(recipient, chainId).explicitGet(), amount, timestamp, signature, chainId)
+        vt.GenesisTransaction(PBRecipients.toAddress(recipient.toByteArray, chainId).explicitGet(), amount, timestamp, signature, chainId)
 
       case Data.Payment(PaymentTransactionData(recipient, amount)) =>
-        vt.PaymentTransaction(sender, PBRecipients.toAddress(recipient, chainId).explicitGet(), amount, feeAmount, timestamp, signature, chainId)
+        vt.PaymentTransaction(
+          sender,
+          PBRecipients.toAddress(recipient.toByteArray, chainId).explicitGet(),
+          amount,
+          feeAmount,
+          timestamp,
+          signature,
+          chainId
+        )
 
       case Data.Transfer(TransferTransactionData(Some(recipient), Some(amount), attachment)) =>
         vt.transfer.TransferTransaction(
@@ -311,7 +338,7 @@ object PBTransactions {
           amount.longAmount,
           feeAssetId,
           feeAmount,
-          toVanillaAttachment(attachment),
+          attachment.toByteStr,
           timestamp,
           proofs,
           chainId
@@ -345,16 +372,26 @@ object PBTransactions {
         )
 
       case Data.Reissue(ReissueTransactionData(Some(Amount(assetId, amount)), reissuable)) =>
-        vt.assets.ReissueTransaction(version.toByte, sender, IssuedAsset(assetId), amount, reissuable, feeAmount, timestamp, proofs, chainId)
+        vt.assets.ReissueTransaction(
+          version.toByte,
+          sender,
+          IssuedAsset(assetId.toByteStr),
+          amount,
+          reissuable,
+          feeAmount,
+          timestamp,
+          proofs,
+          chainId
+        )
 
       case Data.Burn(BurnTransactionData(Some(Amount(assetId, amount)))) =>
-        vt.assets.BurnTransaction(version.toByte, sender, IssuedAsset(assetId), amount, feeAmount, timestamp, proofs, chainId)
+        vt.assets.BurnTransaction(version.toByte, sender, IssuedAsset(assetId.toByteStr), amount, feeAmount, timestamp, proofs, chainId)
 
       case Data.SetAssetScript(SetAssetScriptTransactionData(assetId, script)) =>
         vt.assets.SetAssetScriptTransaction(
           version.toByte,
           sender,
-          IssuedAsset(assetId),
+          IssuedAsset(assetId.toByteStr),
           toVanillaScript(script),
           feeAmount,
           timestamp,
@@ -386,7 +423,7 @@ object PBTransactions {
         )
 
       case Data.LeaseCancel(LeaseCancelTransactionData(leaseId)) =>
-        vt.lease.LeaseCancelTransaction(version.toByte, sender, leaseId.toByteArray, feeAmount, timestamp, proofs, chainId)
+        vt.lease.LeaseCancelTransaction(version.toByte, sender, leaseId.toByteStr, feeAmount, timestamp, proofs, chainId)
 
       case Data.Exchange(ExchangeTransactionData(amount, price, buyMatcherFee, sellMatcherFee, Seq(buyOrder, sellOrder))) =>
         vt.assets.exchange.ExchangeTransaction(
@@ -414,7 +451,7 @@ object PBTransactions {
           mt.transfers.flatMap(t => t.getRecipient.toAddressOrAlias(chainId).toOption.map(ParsedTransfer(_, t.amount))).toList,
           feeAmount,
           timestamp,
-          toVanillaAttachment(mt.attachment),
+          mt.attachment.toByteStr,
           proofs,
           chainId
         )
@@ -423,7 +460,7 @@ object PBTransactions {
         vt.assets.SponsorFeeTransaction(
           version.toByte,
           sender,
-          IssuedAsset(assetId),
+          IssuedAsset(assetId.toByteStr),
           Option(minFee).filter(_ > 0),
           feeAmount,
           timestamp,
@@ -454,7 +491,7 @@ object PBTransactions {
         vt.assets.UpdateAssetInfoTransaction(
           version.toByte,
           sender,
-          IssuedAsset(assetId),
+          IssuedAsset(assetId.toByteStr),
           name,
           description,
           timestamp,
@@ -472,14 +509,11 @@ object PBTransactions {
   def protobuf(tx: VanillaTransaction): PBSignedTransaction = {
     tx match {
       case vt.GenesisTransaction(recipient, amount, timestamp, signature, chainId) =>
-        val data = GenesisTransactionData(PBRecipients.create(recipient).getPublicKeyHash, amount)
-        PBTransactions.create(
-          sender = PublicKey(Array.emptyByteArray),
-          chainId = chainId,
-          timestamp = timestamp,
-          version = 1,
-          proofsArray = Seq(signature),
-          data = Data.Genesis(data)
+        PBTransactions.createGenesis(
+          chainId,
+          timestamp,
+          signature,
+          GenesisTransactionData(PBRecipients.create(recipient).getPublicKeyHash, amount)
         )
 
       case vt.PaymentTransaction(sender, recipient, amount, fee, timestamp, signature, chainId) =>
@@ -488,7 +522,7 @@ object PBTransactions {
 
       case tx: vt.transfer.TransferTransaction =>
         import tx._
-        val data = TransferTransactionData(Some(recipient), Some((assetId, amount)), toPBAttachment(attachment))
+        val data = TransferTransactionData(Some(recipient), Some((assetId, amount)), attachment.toByteString)
         PBTransactions.create(sender, chainId, fee, feeAssetId, timestamp, version, proofs, Data.Transfer(data))
 
       case tx: vt.CreateAliasTransaction =>
@@ -514,16 +548,16 @@ object PBTransactions {
 
       case tx: vt.assets.ReissueTransaction =>
         import tx._
-        val data = ReissueTransactionData(Some(Amount(asset.id, quantity)), reissuable)
+        val data = ReissueTransactionData(Some(Amount(asset.id.toByteString, quantity)), reissuable)
         PBTransactions.create(sender, chainId, fee, tx.assetFee._1, timestamp, version, proofs, Data.Reissue(data))
 
       case tx: vt.assets.BurnTransaction =>
         import tx._
-        val data = BurnTransactionData(Some(Amount(asset.id, quantity)))
+        val data = BurnTransactionData(Some(Amount(asset.id.toByteString, quantity)))
         PBTransactions.create(sender, chainId, fee, tx.assetFee._1, timestamp, version, proofs, Data.Burn(data))
 
       case tx @ vt.assets.SetAssetScriptTransaction(_, sender, assetId, script, fee, timestamp, proofs, chainId) =>
-        val data = SetAssetScriptTransactionData(assetId.id, toPBScript(script))
+        val data = SetAssetScriptTransactionData(assetId.id.toByteString, toPBScript(script))
         PBTransactions.create(sender, chainId, fee, tx.assetFee._1, timestamp, tx.version, proofs, Data.SetAssetScript(data))
 
       case tx @ vt.smart.SetScriptTransaction(_, sender, script, fee, timestamp, proofs, chainId) =>
@@ -537,14 +571,14 @@ object PBTransactions {
 
       case tx: vt.lease.LeaseCancelTransaction =>
         import tx._
-        val data = LeaseCancelTransactionData(leaseId)
+        val data = LeaseCancelTransactionData(leaseId.toByteString)
         PBTransactions.create(sender, chainId, fee, tx.assetFee._1, timestamp, version, proofs, Data.LeaseCancel(data))
 
       case tx @ MassTransferTransaction(version, sender, assetId, transfers, fee, timestamp, attachment, proofs, chainId) =>
         val data = MassTransferTransactionData(
           PBAmounts.toPBAssetId(assetId),
           transfers.map(pt => MassTransferTransactionData.Transfer(Some(pt.address), pt.amount)),
-          toPBAttachment(attachment)
+          attachment.toByteString
         )
         PBTransactions.create(sender, chainId, fee, tx.assetFee._1, timestamp, version, proofs, Data.MassTransfer(data))
 
@@ -553,7 +587,7 @@ object PBTransactions {
         PBTransactions.create(sender, chainId, fee, tx.assetFee._1, timestamp, version, proofs, Data.DataTransaction(txData))
 
       case tx @ vt.assets.SponsorFeeTransaction(version, sender, assetId, minSponsoredAssetFee, fee, timestamp, proofs, chainId) =>
-        val data = SponsorFeeTransactionData(Some(Amount(assetId.id, minSponsoredAssetFee.getOrElse(0L))))
+        val data = SponsorFeeTransactionData(Some(Amount(assetId.id.toByteString, minSponsoredAssetFee.getOrElse(0L))))
         PBTransactions.create(sender, chainId, fee, tx.assetFee._1, timestamp, version, proofs, Data.SponsorFee(data))
 
       case vt.smart.InvokeScriptTransaction(version, sender, dappAddress, fcOpt, payment, fee, feeAssetId, timestamp, proofs, chainId) =>
@@ -564,7 +598,7 @@ object PBTransactions {
         val (feeAsset, feeAmount) = tx.assetFee
 
         val data = UpdateAssetInfoTransactionData()
-          .withAssetId(assetId.id)
+          .withAssetId(assetId.id.toByteString)
           .withName(name)
           .withDescription(description)
 
@@ -591,7 +625,7 @@ object PBTransactions {
     de.value match {
       case DEV.IntValue(num)      => IntegerDataEntry(de.key, num)
       case DEV.BoolValue(bool)    => BooleanDataEntry(de.key, bool)
-      case DEV.BinaryValue(bytes) => BinaryDataEntry(de.key, bytes.toByteArray)
+      case DEV.BinaryValue(bytes) => BinaryDataEntry(de.key, bytes.toByteStr)
       case DEV.StringValue(str)   => StringDataEntry(de.key, str)
       case DEV.Empty              => EmptyDataEntry(de.key)
     }
@@ -603,35 +637,11 @@ object PBTransactions {
       de match {
         case IntegerDataEntry(_, value) => DataTransactionData.DataEntry.Value.IntValue(value)
         case BooleanDataEntry(_, value) => DataTransactionData.DataEntry.Value.BoolValue(value)
-        case BinaryDataEntry(_, value)  => DataTransactionData.DataEntry.Value.BinaryValue(value)
+        case BinaryDataEntry(_, value)  => DataTransactionData.DataEntry.Value.BinaryValue(value.toByteString)
         case StringDataEntry(_, value)  => DataTransactionData.DataEntry.Value.StringValue(value)
         case EmptyDataEntry(_)          => DataTransactionData.DataEntry.Value.Empty
       }
     )
-  }
-
-  def toVanillaAttachment(attachment: Option[Attachment]): Option[vt.transfer.Attachment] =
-    attachment.flatMap { a =>
-      import Attachment.{Attachment => PBA}
-      a.attachment match {
-        case PBA.IntValue(value)    => Some(vt.transfer.Attachment.Num(value))
-        case PBA.BoolValue(value)   => Some(vt.transfer.Attachment.Bool(value))
-        case PBA.BinaryValue(value) => Some(vt.transfer.Attachment.Bin(value.toByteArray))
-        case PBA.StringValue(value) => Some(vt.transfer.Attachment.Str(value))
-        case _                      => None
-      }
-    }
-
-  def toPBAttachment(attachment: Option[vt.transfer.Attachment]): Option[Attachment] = {
-    import vt.transfer.{Attachment => VA}
-    attachment
-      .map {
-        case VA.Num(value)  => IntValue(value)
-        case VA.Bool(value) => BoolValue(value)
-        case VA.Bin(value)  => BinaryValue(ByteString.copyFrom(value))
-        case VA.Str(value)  => StringValue(value)
-      }
-      .map(Attachment.of)
   }
 
   def toVanillaScript(script: ByteString): Option[com.wavesplatform.lang.script.Script] = {
@@ -640,7 +650,7 @@ object PBTransactions {
   }
 
   def toPBScript(script: Option[com.wavesplatform.lang.script.Script]): ByteString = script match {
-    case Some(sc) => ByteString.copyFrom(sc.bytes())
+    case Some(sc) => ByteString.copyFrom(sc.bytes().arr)
     case None     => ByteString.EMPTY
   }
 }

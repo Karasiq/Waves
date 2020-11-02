@@ -15,13 +15,13 @@ import scala.util.Try
 package object block {
 
   // Validation
-  private[block] implicit class BlockValidationOps(block: Block) {
+  private[block] implicit class BlockValidationOps(val block: Block) extends AnyVal {
     def validate: Validation[Block]                             = validateBlock(block)
     def validateToTry: Try[Block]                               = toTry(validateBlock(block))
     def validateGenesis(gs: GenesisSettings): Validation[Block] = validateGenesisBlock(block, gs)
   }
 
-  private[block] implicit class MicroBlockValidationOps(microBlock: MicroBlock) {
+  private[block] implicit class MicroBlockValidationOps(val microBlock: MicroBlock) extends AnyVal  {
     def validate: Validation[MicroBlock] = validateMicroBlock(microBlock)
     def validateToTry: Try[MicroBlock]   = toTry(validateMicroBlock(microBlock))
   }
@@ -29,12 +29,12 @@ package object block {
   private def toTry[A](result: Validation[A]): Try[A] = result.leftMap(ge => new IllegalArgumentException(ge.err)).toTry
 
   // Sign
-  private[block] implicit class BlockSignOps(block: Block) {
-    def sign(signer: PrivateKey): Block = block.copy(signature = crypto.sign(signer, ByteStr(block.bytesWithoutSignature())))
+  private[block] implicit class BlockSignOps(val block: Block) extends AnyVal  {
+    def sign(signer: PrivateKey): Block = block.copy(signature = crypto.sign(signer, block.bodyBytes()))
   }
 
-  private[block] implicit class MicroBlockSignOps(microBlock: MicroBlock) {
-    def sign(signer: PrivateKey): MicroBlock = microBlock.copy(signature = crypto.sign(signer, ByteStr(microBlock.bytesWithoutSignature())))
+  private[block] implicit class MicroBlockSignOps(val microBlock: MicroBlock) extends AnyVal  {
+    def sign(signer: PrivateKey): MicroBlock = microBlock.copy(signature = crypto.sign(signer, microBlock.bytesWithoutSignature()))
   }
 
   def transactionProof(transaction: Transaction, transactionData: Seq[Transaction]): Option[TransactionProof] =
@@ -54,5 +54,5 @@ package object block {
 
   def mkTransactionsRoot(version: Byte, transactionData: Seq[Transaction]): ByteStr =
     if (version < Block.ProtoBlockVersion) ByteStr.empty
-    else ByteStr(mkLevels(transactionData.map(PBTransactions.protobuf(_).toByteArray)).transactionsRoot)
+    else mkLevels(transactionData.map(PBTransactions.protobuf(_).toByteArray)).transactionsRoot
 }

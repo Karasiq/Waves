@@ -10,7 +10,6 @@ import com.wavesplatform.lang.v1.estimator.v2.ScriptEstimatorV2
 import com.wavesplatform.protobuf.Amount
 import com.wavesplatform.protobuf.transaction.{PBSignedTransaction, PBTransactions, Recipient}
 import com.wavesplatform.transaction.smart.script.ScriptCompiler
-import io.grpc.Status.Code
 
 class InvokeScriptPayAndTransferAssetGrpcSuite extends GrpcBaseTransactionSuite {
   private val estimator = ScriptEstimatorV2
@@ -42,7 +41,7 @@ class InvokeScriptPayAndTransferAssetGrpcSuite extends GrpcBaseTransactionSuite 
       .id()
       .toString
 
-    val scriptText  = "match tx {case t:TransferTransaction => false case _ => true}"
+    val scriptText  = "match tx {case _:TransferTransaction => false case _ => true}"
     val smartScript = Right(Some(ScriptCompiler.compile(scriptText, estimator).explicitGet()._1))
     rejAssetId = PBTransactions
       .vanilla(
@@ -131,11 +130,8 @@ class InvokeScriptPayAndTransferAssetGrpcSuite extends GrpcBaseTransactionSuite 
     val paymentAmount = 10
     val fee           = smartMinFee + smartFee * 2
 
-    assertGrpcError(
-      invoke("resendPayment", paymentAmount, rejAssetId, fee),
-      "Transaction is not allowed by token-script",
-      Code.INVALID_ARGUMENT
-    )
+    assertGrpcError(invoke("resendPayment", paymentAmount, rejAssetId, fee), "Transaction is not allowed by token-script")
+
     sender.wavesBalance(dAppAddress).regular shouldBe dAppInitBalance.regular
     sender.wavesBalance(callerAddress).regular shouldBe callerInitBalance.regular
     sender.wavesBalance(receiverAddress).regular shouldBe receiverInitBalance.regular

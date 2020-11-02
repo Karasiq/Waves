@@ -1,7 +1,7 @@
 package com.wavesplatform.state.diffs.smart
 
 import com.wavesplatform.common.state.ByteStr
-import com.wavesplatform.common.utils.EitherExt2
+import com.wavesplatform.common.utils.{Base64, EitherExt2}
 import com.wavesplatform.lang.directives.DirectiveSet
 import com.wavesplatform.lang.directives.values._
 import com.wavesplatform.lang.utils._
@@ -9,13 +9,13 @@ import com.wavesplatform.lang.v1.compiler.ExpressionCompiler
 import com.wavesplatform.lang.v1.compiler.Terms.EVALUATED
 import com.wavesplatform.lang.v1.evaluator.EvaluatorV1
 import com.wavesplatform.lang.v1.parser.Parser
+import com.wavesplatform.lang.v1.traits.Environment
 import com.wavesplatform.state.Blockchain
 import com.wavesplatform.transaction.smart.BlockchainContext.In
 import com.wavesplatform.transaction.smart.{BlockchainContext, buildThisValue}
 import com.wavesplatform.transaction.transfer.TransferTransaction
 import com.wavesplatform.transaction.{DataTransaction, Transaction}
 import com.wavesplatform.utils.EmptyBlockchain
-import fastparse.core.Parsed.Success
 import monix.eval.Coeval
 import shapeless.Coproduct
 
@@ -23,19 +23,19 @@ package object predef {
   val chainId: Byte = 'u'
 
   def runScript[T <: EVALUATED](script: String, version: StdLibVersion, t: In, blockchain: Blockchain, chainId: Byte): Either[String, T] = {
-    val Success(expr, _) = Parser.parseExpr(script)
+    val expr = Parser.parseExpr(script).get.value
     for {
       compileResult <- ExpressionCompiler(compilerContext(version, Expression, isAssetScript = false), expr)
       (typedExpr, _) = compileResult
       directives = DirectiveSet(version, Account, Expression).explicitGet()
       evalContext <- BlockchainContext.build(version,
                                              chainId,
-                                             Coeval.evalOnce(buildThisValue(t, blockchain, directives, None)).map(_.explicitGet()),
+                                             Coeval.evalOnce(buildThisValue(t, blockchain, directives, Coproduct[Environment.Tthis](Environment.AssetId(Array())))).map(_.explicitGet()),
                                              Coeval.evalOnce(blockchain.height),
                                              blockchain,
                                              isTokenContext = false,
                                              isContract = false,
-                                             Coeval(???),
+                                             Coproduct[Environment.Tthis](Environment.AssetId(Array())),
                                              ByteStr.empty)
       r <- EvaluatorV1().apply[T](evalContext, typedExpr)
     } yield r
@@ -78,15 +78,14 @@ package object predef {
        | let sumByteVector = match tx {
        |     case d0: DataTransaction =>
        |      let body = d0.bodyBytes
-       |      body + base64'${ByteStr(tx.bodyBytes.apply()).base64}' == base64'${ByteStr(tx.bodyBytes.apply()).base64}' + base64'${ByteStr(
-         tx.bodyBytes.apply()).base64}'
+       |      body + base64'${Base64.encode(tx.bodyBytes())}' == base64'${Base64.encode(tx.bodyBytes())}' + base64'${Base64.encode(tx.bodyBytes())}'
        |     case _: TransferTransaction => true
        |     case _ => false
        |   }
        |
        | let eqUnion = match tx {
        |   case _: DataTransaction => true
-       |   case t0: TransferTransaction => t0.recipient == Address(base58'${t.recipient.bytes.toString}')
+       |   case t0: TransferTransaction => t0.recipient == Address(base58'${t.recipient.toString}')
        |   case _ => false
        | }
        |
@@ -163,22 +162,22 @@ package object predef {
        |     dataByKey && dataByIndex
        |
        |   case _: TransferTransaction =>
-       |     let add = Address(base58'${t.recipient.bytes.toString}')
+       |     let add = Address(base58'${t.recipient}')
        |     let long = extract(getInteger(add,"${tx.data(0).key}")) == ${tx.data(0).value}
        |     let bool1 = extract(getBoolean(add,"${tx.data(1).key}")) == ${tx.data(1).value}
        |     let bin = extract(getBinary(add,"${tx.data(2).key}")) ==  base58'${tx.data(2).value}'
        |     let str1 = extract(getString(add,"${tx.data(3).key}")) == "${tx.data(3).value}"
        |     long && bool1 && bin && str1
        |
-       |   case a: CreateAliasTransaction => throw("oh no")
-       |   case b: BurnTransaction => throw()
+       |   case _: CreateAliasTransaction => throw("oh no")
+       |   case _: BurnTransaction => throw()
        |   case _ => false
        | }
        |
        | let aFromPK = addressFromPublicKey(tx.senderPublicKey) == tx.sender
        | let aFromStrOrRecip = match tx {
-       |   case _: DataTransaction => addressFromString("${tx.sender.stringRepr}") == Address(base58'${tx.sender.bytes.toString}')
-       |   case t1: TransferTransaction => addressFromRecipient(t1.recipient) == Address(base58'${t.recipient.bytes.toString}')
+       |   case _: DataTransaction => addressFromString("${tx.sender.toAddress}") == Address(base58'${tx.sender.toAddress}')
+       |   case t1: TransferTransaction => addressFromRecipient(t1.recipient) == Address(base58'${t.recipient}')
        |   case _ => false
        | }
        |

@@ -1,6 +1,7 @@
 package com.wavesplatform.state.diffs.smart.performance
 
 import com.wavesplatform.account.{KeyPair, PublicKey}
+import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.common.utils.EitherExt2
 import com.wavesplatform.db.WithState
 import com.wavesplatform.lagonaki.mocks.TestBlock
@@ -29,13 +30,13 @@ class SigVerifyPerformanceTest extends PropSpec with PropertyChecks with WithSta
     for {
       amt <- smallFeeGen
       fee <- smallFeeGen
-    } yield TransferTransaction.selfSigned(1.toByte, from, to.toAddress, Waves, amt, Waves, fee, None, ts).explicitGet()
+    } yield TransferTransaction.selfSigned(1.toByte, from, to.toAddress, Waves, amt, Waves, fee, ByteStr.empty,  ts).explicitGet()
 
   private def scriptedSendGen(from: KeyPair, to: PublicKey, ts: Long): Gen[TransferTransaction] =
     for {
       amt <- smallFeeGen
       fee <- smallFeeGen
-    } yield TransferTransaction.selfSigned(2.toByte, from, to.toAddress, Waves, amt, Waves, fee, None, ts).explicitGet()
+    } yield TransferTransaction.selfSigned(2.toByte, from, to.toAddress, Waves, amt, Waves, fee, ByteStr.empty,  ts).explicitGet()
 
   private def differentTransfers(typed: EXPR) =
     for {
@@ -44,10 +45,10 @@ class SigVerifyPerformanceTest extends PropSpec with PropertyChecks with WithSta
       ts        <- positiveIntGen
       amt       <- smallFeeGen
       fee       <- smallFeeGen
-      genesis = GenesisTransaction.create(master, ENOUGH_AMT, ts).explicitGet()
+      genesis = GenesisTransaction.create(master.toAddress, ENOUGH_AMT, ts).explicitGet()
       setScript <- selfSignedSetScriptTransactionGenP(master, ExprScript(typed).explicitGet())
-      transfer       = simpleSendGen(master, recipient, ts)
-      scriptTransfer = scriptedSendGen(master, recipient, ts)
+      transfer       = simpleSendGen(master, recipient.publicKey, ts)
+      scriptTransfer = scriptedSendGen(master, recipient.publicKey, ts)
       transfers       <- Gen.listOfN(AmtOfTxs, transfer)
       scriptTransfers <- Gen.listOfN(AmtOfTxs, scriptTransfer)
     } yield (genesis, setScript, transfers, scriptTransfers)

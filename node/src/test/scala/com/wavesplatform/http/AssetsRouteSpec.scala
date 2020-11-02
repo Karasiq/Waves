@@ -7,6 +7,7 @@ import com.wavesplatform.api.common.{CommonAccountsApi, CommonAssetsApi}
 import com.wavesplatform.api.http.assets.AssetsApiRoute
 import com.wavesplatform.api.http.requests.{TransferV1Request, TransferV2Request}
 import com.wavesplatform.http.ApiMarshallers._
+import com.wavesplatform.it.util.DoubleExt
 import com.wavesplatform.state.Blockchain
 import com.wavesplatform.transaction.transfer._
 import com.wavesplatform.wallet.Wallet
@@ -27,7 +28,15 @@ class AssetsRouteSpec extends RouteSpec("/assets") with RequestGen with PathMock
   (wallet.privateKeyAccount _).when(senderPrivateKey.toAddress).onCall((_: Address) => Right(senderPrivateKey)).anyNumberOfTimes()
 
   "/transfer" - {
-    val route: Route = AssetsApiRoute(restAPISettings, wallet, DummyUtxPoolSynchronizer.accepting, state, new TestTime(), mock[CommonAccountsApi], mock[CommonAssetsApi]).route
+    val route: Route = AssetsApiRoute(
+      restAPISettings,
+      wallet,
+      DummyUtxPoolSynchronizer.accepting,
+      state,
+      new TestTime(),
+      mock[CommonAccountsApi],
+      mock[CommonAssetsApi]
+    ).route
 
     def posting[A: Writes](v: A): RouteTestResult = Post(routePath("/transfer"), v).addHeader(ApiKeyHeader) ~> route
 
@@ -35,11 +44,11 @@ class AssetsRouteSpec extends RouteSpec("/assets") with RequestGen with PathMock
       val req = TransferV1Request(
         assetId = None,
         feeAssetId = None,
-        amount = 1 * Waves,
-        fee = Waves / 3,
-        sender = senderPrivateKey.stringRepr,
+        amount = 1.waves,
+        fee = 0.3.waves,
+        sender = senderPrivateKey.toAddress.toString,
         attachment = Some("attachment"),
-        recipient = receiverPrivateKey.stringRepr,
+        recipient = receiverPrivateKey.toAddress.toString,
         timestamp = Some(System.currentTimeMillis())
       )
 
@@ -53,12 +62,12 @@ class AssetsRouteSpec extends RouteSpec("/assets") with RequestGen with PathMock
     "accepts VersionedTransferRequest" in {
       val req = TransferV2Request(
         assetId = None,
-        amount = 1 * Waves,
+        amount = 1.waves,
         feeAssetId = None,
-        fee = Waves / 3,
-        sender = senderPrivateKey.stringRepr,
+        fee = 0.3.waves,
+        sender = senderPrivateKey.toAddress.toString,
         attachment = None,
-        recipient = receiverPrivateKey.stringRepr,
+        recipient = receiverPrivateKey.toAddress.toString,
         timestamp = Some(System.currentTimeMillis())
       )
 

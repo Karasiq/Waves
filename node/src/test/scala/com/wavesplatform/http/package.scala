@@ -12,9 +12,6 @@ import play.api.libs.json._
 import scala.util.{Failure, Success}
 
 package object http {
-
-  val Waves: Long = 100000000L
-
   def sameSignature(target: Array[Byte])(actual: Array[Byte]): Boolean = target sameElements actual
 
   implicit def tuple2ToHPM(v: (String, JsValue)): HavePropertyMatcher[JsValue, JsValue] =
@@ -38,7 +35,7 @@ package object http {
 
   implicit val PublicKeyFormat: Format[PublicKey] = byteStrFormat.inmap[PublicKey](
     x => PublicKey(x.arr),
-    x => ByteStr(x)
+    x => ByteStr(x.arr)
   )
 
   implicit val proofsFormat: Format[Proofs] = Format(
@@ -72,19 +69,19 @@ package object http {
 
       case _ => JsError("Can't read PublicKey")
     },
-    Writes(x => JsString(x.bytes.toString))
+    Writes(x => JsString(x.toString))
   )
 
   implicit val versionedTransferTransactionFormat: Reads[TransferTransaction] = (
     (JsPath \ "version").readNullable[Byte] and
-      (JsPath \ "sender").read[PublicKey] and
+      (JsPath \ "senderPublicKey").read[PublicKey] and
       (JsPath \ "recipient").read[AddressOrAlias] and
       (JsPath \ "assetId").read[Asset] and
       (JsPath \ "amount").read[Long] and
       (JsPath \ "timestamp").read[Long] and
       (JsPath \ "feeAssetId").read[Asset] and
       (JsPath \ "fee").read[Long] and
-      (JsPath \ "attachment").readNullable[Attachment] and
+      (JsPath \ "attachment").readWithDefault(ByteStr.empty) and
       (JsPath \ "proofs").readNullable[Proofs] and
       (JsPath \ "signature").readNullable[ByteStr]
   ) { (version, sender, recipient, asset, amount, timestamp, feeAsset, fee, attachment, proofs, signature) =>

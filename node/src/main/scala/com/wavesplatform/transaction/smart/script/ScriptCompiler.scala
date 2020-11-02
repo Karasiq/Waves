@@ -8,7 +8,7 @@ import com.wavesplatform.lang.script.v1.ExprScript
 import com.wavesplatform.lang.script.{ContractScript, Script, ScriptPreprocessor}
 import com.wavesplatform.lang.utils._
 import com.wavesplatform.lang.v1.compiler.{ContractCompiler, ExpressionCompiler}
-import com.wavesplatform.lang.v1.estimator.{ScriptEstimator, ScriptEstimatorV1}
+import com.wavesplatform.lang.v1.estimator.ScriptEstimator
 import com.wavesplatform.utils._
 
 object ScriptCompiler extends ScorexLogging {
@@ -31,19 +31,21 @@ object ScriptCompiler extends ScorexLogging {
   def compileAndEstimateCallables(
       scriptText: String,
       estimator: ScriptEstimator,
-      libraries: Map[String, String] = Map()
+      libraries: Map[String, String] = Map(),
+      defaultStdLib: => StdLibVersion = StdLibVersion.VersionDic.default
   ): Either[String, (Script, Script.ComplexityInfo)] =
-    compileAndEstimate(scriptText, estimator, libraries, Script.complexityInfo)
+    compileAndEstimate(scriptText, estimator, libraries, Script.complexityInfo, defaultStdLib)
 
   def compileAndEstimate[C](
       scriptText: String,
       estimator: ScriptEstimator,
       libraries: Map[String, String] = Map(),
-      estimate: (Script, ScriptEstimator, Boolean) => Either[String, C]
+      estimate: (Script, ScriptEstimator, Boolean) => Either[String, C],
+      defaultStdLib: => StdLibVersion = StdLibVersion.VersionDic.default
   ): Either[String, (Script, C)] =
     for {
       directives  <- DirectiveParser(scriptText)
-      ds          <- Directive.extractDirectives(directives)
+      ds          <- Directive.extractDirectives(directives, defaultStdLib)
       linkedInput <- ScriptPreprocessor(scriptText, libraries, ds.imports)
       result      <- applyAndEstimate(linkedInput, ds.scriptType == Asset, estimator, estimate)
     } yield result

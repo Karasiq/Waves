@@ -13,17 +13,17 @@ import com.wavesplatform.lang.v1.compiler.Terms.{CONST_BYTESTR, FUNCTION_CALL}
 import com.wavesplatform.lang.v1.estimator.v2.ScriptEstimatorV2
 import com.wavesplatform.lang.v1.estimator.v3.ScriptEstimatorV3
 import com.wavesplatform.protobuf.transaction.DataTransactionData.DataEntry
-import com.wavesplatform.protobuf.transaction.{PBTransactions, PBRecipients, Recipient}
+import com.wavesplatform.protobuf.transaction.{PBRecipients, PBTransactions, Recipient}
 import com.wavesplatform.transaction.TxVersion
 import com.wavesplatform.transaction.smart.script.ScriptCompiler
 import io.grpc.Status.Code
 
 class InvokeScriptTransactionGrpcSuite extends GrpcBaseTransactionSuite {
-  private val (firstContract, firstContractAddr) = (firstAcc, firstAddress)
+  private val (firstContract, firstContractAddr)   = (firstAcc, firstAddress)
   private val (secondContract, secondContractAddr) = (secondAcc, secondAddress)
-  private val thirdContract = KeyPair("thirdContract".getBytes("UTF-8"))
-  private val thirdContractAddr = PBRecipients.create(Address.fromPublicKey(thirdContract.publicKey)).getPublicKeyHash
-  private val caller = thirdAcc
+  private val thirdContract                        = KeyPair("thirdContract".getBytes("UTF-8"))
+  private val thirdContractAddr                    = PBRecipients.create(Address.fromPublicKey(thirdContract.publicKey)).getPublicKeyHash
+  private val caller                               = thirdAcc
 
   protected override def beforeAll(): Unit = {
     super.beforeAll()
@@ -49,7 +49,7 @@ class InvokeScriptTransactionGrpcSuite extends GrpcBaseTransactionSuite {
         | @Verifier(tx)
         | func verify() = {
         |    match tx {
-        |        case TransferTransaction => false
+        |        case _: TransferTransaction => false
         |        case _ => true
         | }
         |}
@@ -67,7 +67,7 @@ class InvokeScriptTransactionGrpcSuite extends GrpcBaseTransactionSuite {
         |func bar() = [IntegerEntry("", 2)]
         |
         """.stripMargin
-    val script = ScriptCompiler.compile(scriptText, ScriptEstimatorV2).explicitGet()._1
+    val script  = ScriptCompiler.compile(scriptText, ScriptEstimatorV2).explicitGet()._1
     val script2 = ScriptCompiler.compile(scriptTextV4, ScriptEstimatorV3).explicitGet()._1
     sender.broadcastTransfer(firstAcc, Recipient().withPublicKeyHash(thirdContractAddr), 10.waves, minFee, waitForTx = true)
     sender.setScript(firstContract, Right(Some(script)), setScriptFee, waitForTx = true)
@@ -90,7 +90,7 @@ class InvokeScriptTransactionGrpcSuite extends GrpcBaseTransactionSuite {
         waitForTx = true
       )
 
-      sender.getDataByKey(contract, "a") shouldBe List(DataEntry("a", DataEntry.Value.BinaryValue(ByteString.copyFrom(arg))))
+      sender.getDataByKey(contract, "a") shouldBe List(DataEntry("a", DataEntry.Value.BinaryValue(ByteString.copyFrom(arg.arr))))
       sender.getDataByKey(contract, "sender") shouldBe List(
         DataEntry("sender", DataEntry.Value.BinaryValue(ByteString.copyFrom(caller.toAddress.bytes)))
       )
@@ -114,7 +114,7 @@ class InvokeScriptTransactionGrpcSuite extends GrpcBaseTransactionSuite {
 
   test("verifier works") {
     for (v <- invokeScrTxSupportedVersions) {
-      val contract = if (v < 2) firstContractAddr else secondContractAddr
+      val contract    = if (v < 2) firstContractAddr else secondContractAddr
       val dAppBalance = sender.wavesBalance(contract)
       assertGrpcError(
         sender.broadcastTransfer(firstAcc, Recipient().withPublicKeyHash(contract), transferAmount, 1.waves),
@@ -126,6 +126,7 @@ class InvokeScriptTransactionGrpcSuite extends GrpcBaseTransactionSuite {
   }
 
   test("not able to set an empty key by InvokeScriptTransaction with version >= 2") {
+
     assertGrpcError(
       sender.broadcastInvokeScript(
         caller,
@@ -134,8 +135,8 @@ class InvokeScriptTransactionGrpcSuite extends GrpcBaseTransactionSuite {
         fee = 1.waves,
         version = TxVersion.V2
       ),
-      "State check failed. Reason: Empty keys aren't allowed in tx version >= 2",
-      Code.INVALID_ARGUMENT)
+      "Empty keys aren't allowed in tx version >= 2"
+    )
 
     assertGrpcError(
       sender.broadcastInvokeScript(
@@ -143,9 +144,10 @@ class InvokeScriptTransactionGrpcSuite extends GrpcBaseTransactionSuite {
         Recipient().withPublicKeyHash(thirdContractAddr),
         Some(FUNCTION_CALL(FunctionHeader.User("foo"), List.empty)),
         fee = 1.waves,
-        version = TxVersion.V2
+        version = TxVersion.V2,
+        waitForTx = true
       ),
-      "State check failed. Reason: Empty keys aren't allowed in tx version >= 2",
-      Code.INVALID_ARGUMENT)
+      "Empty keys aren't allowed in tx version >= 2"
+    )
   }
 }

@@ -11,7 +11,8 @@ import monix.reactive.Observer
 import org.iq80.leveldb.DB
 
 object TestStorageFactory {
-  private def wrappedFilter(): BloomFilter = new Wrapper(GBloomFilter.create(Funnels.byteArrayFunnel(), 1000L))
+  private def wrappedFilter(use: Boolean): BloomFilter =
+    if (use) new Wrapper(GBloomFilter.create(Funnels.byteArrayFunnel(), 1000L)) else BloomFilter.AlwaysEmpty
 
   def apply(
       settings: WavesSettings,
@@ -20,12 +21,16 @@ object TestStorageFactory {
       spendableBalanceChanged: Observer[(Address, Asset)],
       blockchainUpdateTriggers: BlockchainUpdateTriggers
   ): (BlockchainUpdaterImpl, LevelDBWriter) = {
-    val levelDBWriter = new LevelDBWriter(db, spendableBalanceChanged, settings.blockchainSettings, settings.dbSettings) {
-      override val orderFilter: BloomFilter        = wrappedFilter()
-      override val dataKeyFilter: BloomFilter      = wrappedFilter()
-      override val wavesBalanceFilter: BloomFilter = wrappedFilter()
-      override val assetBalanceFilter: BloomFilter = wrappedFilter()
+    val useBloomFilter = settings.dbSettings.useBloomFilter
+    val levelDBWriter: LevelDBWriter = new LevelDBWriter(db, spendableBalanceChanged, settings.blockchainSettings, settings.dbSettings) {
+      override val orderFilter: BloomFilter        = wrappedFilter(useBloomFilter)
+      override val dataKeyFilter: BloomFilter      = wrappedFilter(useBloomFilter)
+      override val wavesBalanceFilter: BloomFilter = wrappedFilter(useBloomFilter)
+      override val assetBalanceFilter: BloomFilter = wrappedFilter(useBloomFilter)
     }
-    (new BlockchainUpdaterImpl(levelDBWriter, spendableBalanceChanged, settings, time, blockchainUpdateTriggers), levelDBWriter)
+    (
+      new BlockchainUpdaterImpl(levelDBWriter, spendableBalanceChanged, settings, time, blockchainUpdateTriggers, loadActiveLeases(db, _, _)),
+      levelDBWriter
+    )
   }
 }

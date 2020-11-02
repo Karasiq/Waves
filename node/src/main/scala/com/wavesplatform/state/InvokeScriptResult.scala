@@ -4,13 +4,14 @@ import cats.kernel.Monoid
 import com.google.protobuf.ByteString
 import com.wavesplatform.account.{Address, AddressScheme}
 import com.wavesplatform.common.utils._
-import com.wavesplatform.utils._
-import com.wavesplatform.lang.v1.traits.domain.{Burn, Issue, Reissue}
-import com.wavesplatform.protobuf.transaction.{PBAmounts, PBTransactions, InvokeScriptResult => PBInvokeScriptResult}
+import com.wavesplatform.lang.v1.traits.domain.{Burn, Issue, Reissue, SponsorFee}
+import com.wavesplatform.protobuf.{Amount, _}
+import com.wavesplatform.protobuf.transaction.{PBAmounts, PBRecipients, PBTransactions, InvokeScriptResult => PBInvokeScriptResult}
 import com.wavesplatform.protobuf.utils.PBUtils
 import com.wavesplatform.state.InvokeScriptResult.ErrorMessage
 import com.wavesplatform.transaction.Asset
 import com.wavesplatform.transaction.Asset.Waves
+import com.wavesplatform.utils._
 import play.api.libs.json._
 
 final case class InvokeScriptResult(
@@ -19,7 +20,8 @@ final case class InvokeScriptResult(
     issues: Seq[Issue] = Nil,
     reissues: Seq[Reissue] = Nil,
     burns: Seq[Burn] = Nil,
-    errorMessage: Option[ErrorMessage] = None
+    sponsorFees: Seq[SponsorFee] = Nil,
+    error: Option[ErrorMessage] = None
 )
 
 //noinspection TypeAnnotation
@@ -51,6 +53,7 @@ object InvokeScriptResult {
   }
   implicit val reissueFormat      = Json.writes[Reissue]
   implicit val burnFormat         = Json.writes[Burn]
+  implicit val sponsorFeeFormat   = Json.writes[SponsorFee]
   implicit val errorMessageFormat = Json.writes[ErrorMessage]
   implicit val jsonFormat         = Json.writes[InvokeScriptResult]
 
@@ -78,14 +81,15 @@ object InvokeScriptResult {
       isr.transfers.map(
         payment =>
           PBInvokeScriptResult.Payment(
-            ByteString.copyFrom(payment.address.bytes),
+            ByteString.copyFrom(PBRecipients.publicKeyHash(payment.address)),
             Some(PBAmounts.fromAssetAndAmount(payment.asset, payment.amount))
           )
       ),
       isr.issues.map(toPbIssue),
       isr.reissues.map(toPbReissue),
       isr.burns.map(toPbBurn),
-      isr.errorMessage.map(toPbErrorMessage)
+      isr.error.map(toPbErrorMessage),
+      isr.sponsorFees.map(toPbSponsorFee)
     )
   }
 
@@ -109,19 +113,27 @@ object InvokeScriptResult {
   private def toPbBurn(b: Burn) =
     PBInvokeScriptResult.Burn(ByteString.copyFrom(b.assetId.arr), b.quantity)
 
+  private def toPbSponsorFee(sf: SponsorFee) =
+    PBInvokeScriptResult.SponsorFee(Some(Amount(sf.assetId.toByteString, sf.minSponsoredAssetFee.getOrElse(0))))
+
   private def toPbErrorMessage(em: ErrorMessage) =
     PBInvokeScriptResult.ErrorMessage(em.code, em.text)
 
   private def toVanillaIssue(r: PBInvokeScriptResult.Issue): Issue = {
     assert(r.script.isEmpty)
-    Issue(r.assetId.toByteArray, None, r.decimals, r.description, r.reissuable, r.name, r.amount, r.nonce)
+    Issue(r.assetId.toByteStr, None, r.decimals, r.description, r.reissuable, r.name, r.amount, r.nonce)
   }
 
   private def toVanillaReissue(r: PBInvokeScriptResult.Reissue) =
-    Reissue(r.assetId.toByteArray, r.isReissuable, r.amount)
+    Reissue(r.assetId.toByteStr, r.isReissuable, r.amount)
 
   private def toVanillaBurn(b: PBInvokeScriptResult.Burn) =
-    Burn(b.assetId.toByteArray, b.amount)
+    Burn(b.assetId.toByteStr, b.amount)
+
+  private def toVanillaSponsorFee(sf: PBInvokeScriptResult.SponsorFee) = {
+    val amount = sf.minFee.get
+    SponsorFee(amount.assetId.toByteStr, Some(amount.amount).filter(_ > 0))
+  }
 
   private def toVanillaErrorMessage(b: PBInvokeScriptResult.ErrorMessage) =
     ErrorMessage(b.code, b.text)
@@ -131,11 +143,12 @@ object InvokeScriptResult {
       pbValue.data.map(PBTransactions.toVanillaDataEntry),
       pbValue.transfers.map { p =>
         val (asset, amount) = PBAmounts.toAssetAndAmount(p.getAmount)
-        InvokeScriptResult.Payment(Address.fromBytes(p.address.toByteArray).explicitGet(), asset, amount)
+        InvokeScriptResult.Payment(PBRecipients.toAddress(p.address.toByteArray, AddressScheme.current.chainId).explicitGet(), asset, amount)
       },
       pbValue.issues.map(toVanillaIssue),
       pbValue.reissues.map(toVanillaReissue),
       pbValue.burns.map(toVanillaBurn),
+      pbValue.sponsorFees.map(toVanillaSponsorFee),
       pbValue.errorMessage.map(toVanillaErrorMessage)
     )
   }

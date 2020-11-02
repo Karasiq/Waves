@@ -1,10 +1,10 @@
 package com.wavesplatform.protobuf.block
 
 import com.google.protobuf.ByteString
-import com.wavesplatform.account.{AddressScheme, PublicKey}
+import com.wavesplatform.account.AddressScheme
 import com.wavesplatform.block.BlockHeader
-import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.common.utils.EitherExt2
+import com.wavesplatform.protobuf.ByteStringExt
 import com.wavesplatform.protobuf.block.Block.{Header => PBHeader}
 import com.wavesplatform.protobuf.transaction.PBTransactions
 
@@ -15,13 +15,13 @@ object PBBlocks {
     BlockHeader(
       header.version.toByte,
       header.timestamp,
-      ByteStr(header.reference.toByteArray),
+      header.reference.toByteStr,
       header.baseTarget,
-      ByteStr(header.generationSignature.toByteArray),
-      PublicKey(header.generator.toByteArray),
+      header.generationSignature.toByteStr,
+      header.generator.toPublicKey,
       header.featureVotes.map(_.toShort),
       header.rewardVote,
-      ByteStr(header.transactionsRoot.toByteArray)
+      header.transactionsRoot.toByteStr
     )
 
   def vanilla(block: PBBlock, unsafe: Boolean = false): Try[VanillaBlock] = Try {
@@ -29,20 +29,20 @@ object PBBlocks {
     val header       = block.getHeader
     val transactions = block.transactions.map(PBTransactions.vanilla(_, unsafe).explicitGet())
 
-    VanillaBlock(vanilla(header), ByteStr(block.signature.toByteArray), transactions)
+    VanillaBlock(vanilla(header), block.signature.toByteStr, transactions)
   }
 
   def protobuf(header: BlockHeader): PBHeader = PBBlock.Header(
     AddressScheme.current.chainId,
-    ByteString.copyFrom(header.reference),
+    ByteString.copyFrom(header.reference.arr),
     header.baseTarget,
-    ByteString.copyFrom(header.generationSignature),
+    ByteString.copyFrom(header.generationSignature.arr),
     header.featureVotes.map(_.toInt),
     header.timestamp,
     header.version,
-    ByteString.copyFrom(header.generator),
+    ByteString.copyFrom(header.generator.arr),
     header.rewardVote,
-    ByteString.copyFrom(header.transactionsRoot)
+    ByteString.copyFrom(header.transactionsRoot.arr)
   )
 
   def protobuf(block: VanillaBlock): PBBlock = {
@@ -50,7 +50,7 @@ object PBBlocks {
 
     new PBBlock(
       Some(protobuf(header)),
-      ByteString.copyFrom(block.signature),
+      ByteString.copyFrom(block.signature.arr),
       transactionData.map(PBTransactions.protobuf)
     )
   }

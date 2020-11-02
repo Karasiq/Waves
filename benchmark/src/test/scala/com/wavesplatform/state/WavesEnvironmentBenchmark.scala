@@ -95,7 +95,7 @@ object WavesEnvironmentBenchmark {
 
   @State(Scope.Benchmark)
   class AccountBalanceOfWavesSt extends BaseSt {
-    val accounts: Vector[Array[Byte]] = load("accounts", benchSettings.accountsFile)(x => AddressOrAlias.fromString(x).explicitGet().bytes.arr)
+    val accounts: Vector[Array[Byte]] = load("accounts", benchSettings.accountsFile)(x => AddressOrAlias.fromString(x).explicitGet().bytes)
   }
 
   @State(Scope.Benchmark)
@@ -146,7 +146,7 @@ object WavesEnvironmentBenchmark {
         Coeval.raiseError(new NotImplementedError("`tx` is not implemented")),
         Coeval(state.height),
         state,
-        Coeval.raiseError(new NotImplementedError("`this` is not implemented")),
+        null,
         DirectiveSet.contractDirectiveSet,
         ByteStr.empty
       )

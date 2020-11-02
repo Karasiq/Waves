@@ -2,6 +2,7 @@ package com.wavesplatform.it.sync.grpc
 
 import com.google.common.primitives.Longs
 import com.google.protobuf.ByteString
+import com.typesafe.config.Config
 import com.wavesplatform.account.{Address, KeyPair}
 import com.wavesplatform.api.grpc.TransactionsRequest
 import com.wavesplatform.common.state.ByteStr
@@ -31,8 +32,6 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
   private val caller       = thirdAcc
   private val callerAddr   = PBRecipients.create(Address.fromPublicKey(thirdAcc.publicKey)).getPublicKeyHash
 
-  private val maxTxsInMicroBlock = sender.config.getInt("waves.miner.max-transactions-in-micro-block")
-
   private val assetAmount    = 1000000000L
   private var smartAsset     = ""
   private var sponsoredAsset = ""
@@ -46,7 +45,7 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
   protected override def beforeAll(): Unit = {
     super.beforeAll()
 
-    sender.broadcastTransfer(sender.privateKey, Recipient().withPublicKeyHash(contractAddr), 100.waves, minFee, waitForTx = true)
+    sender.broadcastTransfer(sender.keyPair, Recipient().withPublicKeyHash(contractAddr), 100.waves, minFee, waitForTx = true)
 
     smartAsset = PBTransactions
       .vanillaUnsafe(
@@ -94,16 +93,20 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
          |@Callable(inv)
          |func tikTok() = {
          |  let action = valueOrElse(getString(this, "tikTok"), "unknown")
-         |  if (action == "transfer") then [ScriptTransfer(inv.caller, 15, asset)]
+         |  let check = ${"sigVerify(base58'', base58'', base58'') ||" * 16} false
+         |  if (check) then []
+         |  else if (action == "transfer") then [ScriptTransfer(inv.caller, 15, asset)]
          |  else if (action == "issue") then [Issue("new asset", "", 100, 8, true, unit, 0)]
-         |  else if (action == "reissue") then [Reissue(asset, true, 15)]
+         |  else if (action == "reissue") then [Reissue(asset, 15, true)]
          |  else if (action == "burn") then [Burn(asset, 15)]
          |  else []
          |}
          |
          |@Callable(inv)
          |func transferAndWrite(x: Int) = {
-         |  if (x % 4 == 0) then [ScriptTransfer(inv.caller, 15, asset), IntegerEntry("n", x)]
+         |  let check = ${"sigVerify(base58'', base58'', base58'') ||" * 16} false
+         |  if (check) then []
+         |  else if (x % 4 == 0) then [ScriptTransfer(inv.caller, 15, asset), IntegerEntry("n", x)]
          |  else if (x % 4 == 1) then [ScriptTransfer(inv.caller, 15, asset), BooleanEntry("b", x % 2 == 0)]
          |  else if (x % 4 == 2) then [ScriptTransfer(inv.caller, 15, asset), BinaryEntry("bn", toBytes(x))]
          |  else if (x % 4 == 3) then [ScriptTransfer(inv.caller, 15, asset), StringEntry("s", toString(x))]
@@ -113,7 +116,14 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
          |@Callable(inv)
          |func canThrow() = {
          |  let action = valueOrElse(getString(this, "crash"), "no")
-         |  if (action == "yes") then throw("Crashed by dApp")
+         |  let check = ${"sigVerify(base58'', base58'', base58'') ||" * 16} true
+         |
+         |  if (action == "yes")
+         |  then {
+         |    if (check)
+         |    then throw("Crashed by dApp")
+         |    else throw("Crashed by dApp")
+         |  }
          |  else []
          |}
          |
@@ -151,6 +161,7 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
     for (typeName <- Seq("transfer", "issue", "reissue", "burn")) {
       updateTikTok("unknown", setAssetScriptMinFee)
 
+      overflowBlock()
       sendTxsAndThenPriorityTx(
         _ =>
           sender
@@ -160,7 +171,7 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
               Some(FUNCTION_CALL(FunctionHeader.User("tikTok"), List.empty)),
               fee = invokeFee
             ),
-        () => updateTikTok(typeName, priorityFee)
+        () => updateTikTok(typeName, priorityFee, waitForTx = false)
       )((txs, _) => assertFailedTxs(txs))
     }
   }
@@ -173,6 +184,7 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
     for (funcName <- Seq("transfer", "reissue", "burn")) {
       updateTikTok(funcName, setAssetScriptMinFee)
       updateAssetScript(result = true, smartAsset, contract, setAssetScriptMinFee)
+      overflowBlock()
 
       sendTxsAndThenPriorityTx(
         _ =>
@@ -183,7 +195,7 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
               Some(FUNCTION_CALL(FunctionHeader.User("tikTok"), List.empty)),
               fee = invokeFee
             ),
-        () => updateAssetScript(result = false, smartAsset, contract, priorityFee)
+        () => updateAssetScript(result = false, smartAsset, contract, priorityFee, waitForTx = false)
       )((txs, _) => assertFailedTxs(txs))
     }
   }
@@ -212,6 +224,7 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
     updateAssetScript(result = true, smartAsset, contract, setAssetScriptMinFee)
     updateTikTok("unknown", setAssetScriptMinFee)
 
+    overflowBlock()
     sendTxsAndThenPriorityTx(
       _ =>
         sender
@@ -222,7 +235,7 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
             payments = Seq(Amount(ByteString.copyFrom(paymentAsset.arr), 15)),
             fee = invokeFee
           ),
-      () => updateAssetScript(result = false, paymentAsset.toString, caller, priorityFee)
+      () => updateAssetScript(result = false, paymentAsset.toString, caller, priorityFee, waitForTx = false)
     )((txs, _) => assertFailedTxs(txs))
   }
 
@@ -231,7 +244,6 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
     val invokeFeeInAsset     = invokeFee / 100000 // assetFee = feeInWaves / feeUnit * sponsorship
     val setAssetScriptMinFee = setAssetScriptFee + smartFee * 2
     val priorityFee          = setAssetScriptMinFee + invokeFee
-    val totalWavesSpend      = invokeFee * maxTxsInMicroBlock * 2
 
     updateAssetScript(result = true, smartAsset, contract, setAssetScriptMinFee)
     updateTikTok("reissue", setAssetScriptMinFee)
@@ -263,7 +275,7 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
         ),
       () => updateAssetScript(result = false, smartAsset, contract, priorityFee)
     ) { (txs, _) =>
-      sender.wavesBalance(contractAddr).regular shouldBe prevBalance - totalWavesSpend - priorityFee
+      sender.wavesBalance(contractAddr).regular shouldBe prevBalance - invokeFee * txs.size - priorityFee
       assertFailedTxs(txs)
     }
   }
@@ -282,6 +294,7 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
     sender.putData(contract, initialEntries, minFee + smartFee)
     updateAssetScript(result = true, smartAsset, contract, setAssetScriptMinFee)
 
+    overflowBlock()
     sendTxsAndThenPriorityTx(
       i =>
         sender.broadcastInvokeScript(
@@ -290,7 +303,7 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
           Some(FUNCTION_CALL(FunctionHeader.User("transferAndWrite"), List(Terms.CONST_LONG(i)))),
           fee = invokeFee
         ),
-      () => updateAssetScript(result = false, smartAsset, contract, priorityFee)
+      () => updateAssetScript(result = false, smartAsset, contract, priorityFee, waitForTx = false)
     ) { (txs, _) =>
       val failed              = assertFailedTxs(txs)
       val lastSuccessEndArg   = txs.size - failed.size
@@ -306,6 +319,7 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
             case i if i % 4 == 3 => "s"  -> StringDataEntry("s", i.toString)
           }
           .toMap
+          .view
           .mapValues(PBTransactions.toPBDataEntry)
       initialEntries.map(entry => entry.key -> entry).toMap.foreach {
         case (key, initial) =>
@@ -317,9 +331,9 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
           sc.issues.size shouldBe 0
           sc.reissues.size shouldBe 0
           sc.burns.size shouldBe 0
-          sc.errorMessage shouldBe 'defined
-          sc.errorMessage.get.code shouldBe 3
-          sc.errorMessage.get.text shouldBe "Transaction is not allowed by token-script"
+          sc.error shouldBe defined
+          sc.error.get.code shouldBe 3
+          sc.error.get.text should include("Transaction is not allowed by script of the asset")
       }
 
       failed
@@ -334,8 +348,8 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
     updateTikTok("unknown", setAssetScriptMinFee)
     updateAssetScript(result = true, smartAsset, contract, setAssetScriptMinFee)
 
+    overflowBlock()
     val prevBalance = sender.wavesBalance(callerAddr).regular
-
     sendTxsAndThenPriorityTx(
       _ =>
         sender.broadcastInvokeScript(
@@ -356,7 +370,7 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
                    |{-# SCRIPT_TYPE ACCOUNT #-}
                    |
                    |match (tx) {
-                   |case t: InvokeScriptTransaction => false
+                   |case _: InvokeScriptTransaction => false
                    |case _ => true
                    |}
                    |""".stripMargin,
@@ -365,8 +379,7 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
               .toOption
               .map(_._1)
           ),
-          fee = priorityFee,
-          waitForTx = true
+          fee = priorityFee
         )
     ) { (txs, _) =>
       val invalid = assertInvalidTxs(txs)
@@ -438,15 +451,19 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
         )
         sender.broadcast(tx.transaction.get, tx.proofs)
       }
+      overflowBlock()
       sendTxsAndThenPriorityTx(
         txsSend,
-        () => updateAssetScript(result = false, invalidScriptAsset, owner, priorityFee)
+        () => updateAssetScript(result = false, invalidScriptAsset, owner, priorityFee, waitForTx = false)
       )((txs, _) => assertFailedTxs(txs))
-      updateAssetScript(result = true, invalidScriptAsset, owner, setAssetScriptFee + smartFee)
+
+      updateAssetScript(result = true, invalidScriptAsset, owner, priorityFee * 2)
     }
   }
 
   test("ExchangeTransaction: invalid exchange tx when account script fails") {
+    waitForEmptyUtx()
+
     val quantity            = 1000000000L
     val amountAsset         = sender.broadcastIssue(seller, "Amount asset", quantity, 8, reissuable = true, issueFee)
     val priceAsset          = sender.broadcastIssue(buyer, "Price asset", quantity, 8, reissuable = true, issueFee)
@@ -501,12 +518,22 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
         sender.broadcast(tx.transaction.get, tx.proofs)
       }
 
+      overflowBlock()
       sendTxsAndThenPriorityTx(
         txsSend,
-        () => updateAccountScript(Some(false), invalidAccount, priorityFee)
+        () => updateAccountScript(Some(false), invalidAccount, priorityFee, waitForTx = false)
       )((txs, _) => assertInvalidTxs(txs))
       updateAccountScript(None, invalidAccount, setScriptFee + smartFee)
     }
+  }
+
+  def overflowBlock(): Unit = {
+    val entries = List.tabulate(4)(n => PBTransactions.toPBDataEntry(BinaryDataEntry("test" + n, ByteStr(Array.fill(32767)(n.toByte)))))
+    val fee     = calcDataFee(entries)
+    waitForEmptyUtx()
+    waitForHeightArise()
+    for (_ <- 1 to 8) sender.putData(sender.keyPair, entries, fee)
+    waitForEmptyUtx()
   }
 
   private def calcDataFee(data: List[DataEntry]): Long = {
@@ -516,12 +543,14 @@ class FailedTransactionGrpcSuite extends GrpcBaseTransactionSuite with FailedTra
     } else minFee
   }
 
-  private def updateTikTok(result: String, fee: Long): PBSignedTransaction =
-    sender.putData(contract, List(StringDataEntry("tikTok", result)).map(PBTransactions.toPBDataEntry), fee = fee, waitForTx = true)
+  private def updateTikTok(result: String, fee: Long, waitForTx: Boolean = true): PBSignedTransaction =
+    sender.putData(contract, List(StringDataEntry("tikTok", result)).map(PBTransactions.toPBDataEntry), fee = fee, waitForTx = waitForTx)
 
   private def waitForTxs(txs: Seq[PBSignedTransaction]): Unit = {
     txs.foreach(tx => sender.waitForTransaction(PBTransactions.vanillaUnsafe(tx).id().toString))
   }
 
   override protected def waitForHeightArise(): Unit = sender.waitForHeightArise()
+
+  override protected def nodeConfigs: Seq[Config] = Configs
 }

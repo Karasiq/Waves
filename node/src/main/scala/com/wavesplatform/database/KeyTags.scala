@@ -21,6 +21,8 @@ object KeyTags extends Enumeration {
   FilledVolumeAndFeeHistory,
   FilledVolumeAndFee,
   ChangedAddresses,
+  ChangedAssetBalances,
+  ChangedDataKeys,
   AddressIdOfAlias,
   LastAddressId,
   AddressId,
@@ -37,12 +39,11 @@ object KeyTags extends Enumeration {
   AssetScriptHistory,
   AssetScript,
   SafeRollbackHeight,
-  ChangedDataKeys,
   BlockInfoAtHeight,
   NthTransactionInfoAtHeight,
   AddressTransactionSeqNr,
   AddressTransactionHeightTypeAndNums,
-  TransactionHeightAndNumsById,
+  TransactionMetaById,
   BlockTransactionsFee,
   InvokeScriptResult,
   BlockReward,
@@ -52,7 +53,11 @@ object KeyTags extends Enumeration {
   AssetStaticInfo,
   NftCount,
   NftPossession,
-  BloomFilterChecksum = Value
+  BloomFilterChecksum,
+  IssuedAssets,
+  UpdatedAssets,
+  SponsoredAssets,
+  StateHash = Value
 
   final implicit class KeyTagExt(val t: KeyTag) extends AnyVal {
     @inline def prefixBytes: Array[Byte] = Shorts.toByteArray(t.id.toShort)

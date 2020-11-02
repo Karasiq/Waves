@@ -1,6 +1,7 @@
 package com.wavesplatform.network
 
 import java.net.InetSocketAddress
+import java.util
 
 import com.wavesplatform.account.{KeyPair, PublicKey}
 import com.wavesplatform.block.Block.BlockId
@@ -28,8 +29,13 @@ case class GetBlock(signature: ByteStr) extends Message
 
 case class LocalScoreChanged(newLocalScore: BigInt) extends Message
 
-case class RawBytes(code: Byte, data: ByteStr) extends Message {
+case class RawBytes(code: Byte, data: Array[Byte]) extends Message {
   override def toString: String = s"RawBytes($code, ${data.length} bytes)"
+
+  override def equals(obj: Any): Boolean = obj match {
+    case o: RawBytes => o.code == code && util.Arrays.equals(o.data, data)
+    case _ => false
+  }
 }
 
 object RawBytes {
@@ -53,7 +59,9 @@ case class BlockForged(block: Block) extends Message
 
 case class MicroBlockRequest(totalBlockSig: ByteStr) extends Message
 
-case class MicroBlockResponse(microblock: MicroBlock, totalBlockId: BlockId)
+case class MicroBlockResponse(microblock: MicroBlock, totalBlockId: BlockId) extends Message {
+  override def toString: String = microblock.stringRepr(totalBlockId)
+}
 
 object MicroBlockResponse {
   def apply(mb: MicroBlock): MicroBlockResponse = {
@@ -64,15 +72,14 @@ object MicroBlockResponse {
 
 case class MicroBlockInv(sender: PublicKey, totalBlockId: ByteStr, reference: ByteStr, signature: ByteStr) extends Message with Signed {
   override val signatureValid: Coeval[Boolean] =
-    Coeval.evalOnce(crypto.verify(signature.arr, sender.toAddress.bytes.arr ++ totalBlockId.arr ++ reference.arr, sender))
+    Coeval.evalOnce(crypto.verify(signature, sender.toAddress.bytes ++ totalBlockId.arr ++ reference.arr, sender))
 
   override def toString: String = s"MicroBlockInv(${totalBlockId.trim} ~> ${reference.trim})"
 }
 
 object MicroBlockInv {
-
   def apply(sender: KeyPair, totalBlockRef: ByteStr, prevBlockRef: ByteStr): MicroBlockInv = {
-    val signature = crypto.sign(sender, sender.toAddress.bytes.arr ++ totalBlockRef.arr ++ prevBlockRef.arr)
-    new MicroBlockInv(sender, totalBlockRef, prevBlockRef, ByteStr(signature))
+    val signature = crypto.sign(sender.privateKey, sender.toAddress.bytes ++ totalBlockRef.arr ++ prevBlockRef.arr)
+    new MicroBlockInv(sender.publicKey, totalBlockRef, prevBlockRef, signature)
   }
 }

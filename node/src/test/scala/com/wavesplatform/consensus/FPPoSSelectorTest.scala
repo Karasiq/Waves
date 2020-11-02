@@ -18,7 +18,7 @@ import com.wavesplatform.state.diffs.ENOUGH_AMT
 import com.wavesplatform.state.utils.TestLevelDB
 import com.wavesplatform.transaction.{BlockchainUpdater, GenesisTransaction}
 import com.wavesplatform.utils.Time
-import com.wavesplatform.{TestHelpers, TransactionGen, WithDB, crypto}
+import com.wavesplatform.{EitherMatchers, TestHelpers, TransactionGen, WithDB, crypto}
 import org.iq80.leveldb.Options
 import org.scalacheck.{Arbitrary, Gen}
 import org.scalatest.{FreeSpec, Matchers}
@@ -27,7 +27,7 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 import scala.concurrent.duration._
 import scala.util.Random
 
-class FPPoSSelectorTest extends FreeSpec with Matchers with WithDB with TransactionGen with DBCacheSettings with ScalaCheckPropertyChecks {
+class FPPoSSelectorTest extends FreeSpec with Matchers with EitherMatchers with WithDB with TransactionGen with DBCacheSettings with ScalaCheckPropertyChecks {
   import FPPoSSelectorTest._
 
   private val generationSignatureMethods = Table(
@@ -61,14 +61,8 @@ class FPPoSSelectorTest extends FreeSpec with Matchers with WithDB with Transact
                   .getOrElse(fork1.head)
 
               val gs =
-                if (vrfActivated)
-                  blockForHit._2.arr
-                else
-                  PoSCalculator
-                    .generationSignature(
-                      blockForHit._2,
-                      miner1
-                    )
+                if (vrfActivated) blockForHit._2.arr
+                else PoSCalculator.generationSignature(blockForHit._2, miner1.publicKey)
               calcDelay(gs, fork1.head._1.header.baseTarget, miner1Balance)
             }
 
@@ -84,14 +78,8 @@ class FPPoSSelectorTest extends FreeSpec with Matchers with WithDB with Transact
                   .getOrElse(fork2.head)
 
               val gs =
-                if (vrfActivated)
-                  blockForHit._2.arr
-                else
-                  PoSCalculator
-                    .generationSignature(
-                      blockForHit._2,
-                      miner1
-                    )
+                if (vrfActivated) blockForHit._2.arr
+                else PoSCalculator.generationSignature(blockForHit._2, miner1.publicKey)
               calcDelay(gs, fork2.head._1.header.baseTarget, miner1Balance)
             }
 
@@ -111,9 +99,7 @@ class FPPoSSelectorTest extends FreeSpec with Matchers with WithDB with Transact
             val lastBlock    = blockchain.lastBlockHeader.get
             val block        = forgeBlock(miner, blockchain, pos, blockVersion)()
 
-            pos
-              .validateBlockDelay(height, block.header, lastBlock.header, minerBalance)
-              .explicitGet()
+            pos.validateBlockDelay(height, block.header, lastBlock.header, minerBalance) should beRight
         }
     }
 
@@ -269,13 +255,14 @@ class FPPoSSelectorTest extends FreeSpec with Matchers with WithDB with Transact
     )
     val settings0 = WavesSettings.fromRootConfig(loadConfig(ConfigFactory.load()))
     val settings  = settings0.copy(featuresSettings = settings0.featuresSettings.copy(autoShutdownOnUnsupportedFeature = false))
-    val bcu       = new BlockchainUpdaterImpl(defaultWriter, ignoreSpendableBalanceChanged, settings, ntpTime, ignoreBlockchainUpdateTriggers)
-    val pos       = new PoSSelector(bcu, settings.blockchainSettings, settings.synchronizationSettings)
+    val bcu =
+      new BlockchainUpdaterImpl(defaultWriter, ignoreSpendableBalanceChanged, settings, ntpTime, ignoreBlockchainUpdateTriggers, (_, _) => Seq.empty)
+    val pos = PoSSelector(bcu, settings.synchronizationSettings)
     try {
       val (accounts, blocks) = gen(ntpTime).sample.get
 
       blocks.foreach { block =>
-        bcu.processBlock(block, block.header.generationSignature.take(Block.HitSourceLength)).explicitGet()
+        bcu.processBlock(block, block.header.generationSignature.take(Block.HitSourceLength)) should beRight
       }
 
       f(Env(pos, bcu, accounts, blocks))
@@ -322,19 +309,21 @@ object FPPoSSelectorTest {
 
       val (gs, hitSource) =
         if (blockVersion < Block.ProtoBlockVersion) {
-          val gs = PoSCalculator
-            .generationSignature(
-              blockForHit._2,
-              miner.publicKey
-            )
+          val gs = ByteStr(
+            PoSCalculator
+              .generationSignature(
+                blockForHit._2,
+                miner.publicKey
+              )
+          )
           (gs, gs)
         } else {
           val gs = PoSCalculator
             .generationVRFSignature(
-              blockForHit._2,
+              blockForHit._2.arr,
               miner.privateKey
             )
-          val gi = crypto.verifyVRF(ByteStr(gs), blockForHit._2, miner.publicKey).explicitGet().arr
+          val gi = crypto.verifyVRF(gs, blockForHit._2.arr, miner.publicKey).explicitGet()
           (gs, gi)
         }
 
@@ -355,7 +344,7 @@ object FPPoSSelectorTest {
           forkChain.head._1.header.timestamp + delay,
           forkChain.head._1.id(),
           bt,
-          ByteStr(gs),
+          gs,
           Seq.empty,
           miner,
           Seq.empty,
@@ -363,7 +352,7 @@ object FPPoSSelectorTest {
         )
         .explicitGet()
 
-      (newBlock, ByteStr(hitSource)) :: forkChain
+      (newBlock, hitSource) :: forkChain
     }
   }
 
@@ -372,10 +361,10 @@ object FPPoSSelectorTest {
       updateBT: Long => Long = identity,
       updateGS: ByteStr => ByteStr = identity
   ): Block = {
-    val height                                 = blockchain.height
+    val height          = blockchain.height
     val lastBlockHeader = blockchain.lastBlockHeader.get
-    val ggParentTS                             = blockchain.blockHeader(height - 2).map(_.header.timestamp)
-    val minerBalance                           = blockchain.effectiveBalance(miner.toAddress, 0)
+    val ggParentTS      = blockchain.blockHeader(height - 2).map(_.header.timestamp)
+    val minerBalance    = blockchain.effectiveBalance(miner.toAddress, 0)
     val delay = updateDelay(
       pos
         .getValidBlockDelay(
@@ -417,7 +406,7 @@ object FPPoSSelectorTest {
   val accountGen: Gen[KeyPair] =
     Gen
       .containerOfN[Array, Byte](32, Arbitrary.arbitrary[Byte])
-      .map(seed => KeyPair(seed: ByteStr))
+      .map(seed => KeyPair(ByteStr(seed)))
 
   def chainGen(balances: List[Long], blockCount: Int, blockVersion: Byte = Block.PlainBlockVersion)(t: Time): Gen[(Seq[KeyPair], Seq[Block])] = {
     val ts = t.correctedTime()
@@ -429,10 +418,10 @@ object FPPoSSelectorTest {
         for {
           (acc, balance) <- accountsWithBalances
           i = accountsWithBalances.indexOf((acc, balance))
-        } yield (acc, GenesisTransaction.create(acc, balance, ts + i).explicitGet())
+        } yield (acc, GenesisTransaction.create(acc.toAddress, balance, ts + i).explicitGet())
       }
       .map { txs =>
-        val lastTxTimestamp = txs.lastOption.map(_._2.timestamp) getOrElse ts
+        val lastTxTimestamp = txs.lastOption.fold(ts)(_._2.timestamp)
         val genesisBlock    = TestBlock.create(lastTxTimestamp + 1, txs.map(_._2))
 
         val chain = (1 to blockCount foldLeft List(genesisBlock)) { (blocks, d) =>

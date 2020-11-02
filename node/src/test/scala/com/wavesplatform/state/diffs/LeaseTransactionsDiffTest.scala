@@ -30,12 +30,12 @@ class LeaseTransactionsDiffTest extends PropSpec with PropertyChecks with WithSt
       master    <- accountGen
       recipient <- accountGen suchThat (_ != master)
       ts        <- positiveIntGen
-      genesis: GenesisTransaction = GenesisTransaction.create(master, ENOUGH_AMT, ts).explicitGet()
-      (lease, unlease) <- leaseAndCancelGeneratorP(master, recipient)
+      genesis: GenesisTransaction = GenesisTransaction.create(master.toAddress, ENOUGH_AMT, ts).explicitGet()
+      (lease, unlease) <- leaseAndCancelGeneratorP(master, recipient.toAddress)
     } yield (genesis, lease, unlease)
 
     forAll(sunnyDayLeaseLeaseCancel) {
-      case ((genesis, lease, leaseCancel)) =>
+      case (genesis, lease, leaseCancel) =>
         assertDiffAndState(Seq(TestBlock.create(Seq(genesis))), TestBlock.create(Seq(lease))) {
           case (totalDiff, _) =>
             val totalPortfolioDiff = Monoid.combineAll(totalDiff.portfolios.values)
@@ -56,22 +56,22 @@ class LeaseTransactionsDiffTest extends PropSpec with PropertyChecks with WithSt
     }
   }
 
-  val repeatedCancelAllowed   = Gen.choose(0, allowMultipleLeaseCancelTransactionUntilTimestamp - 1)
-  val repeatedCancelForbidden = Gen.choose(allowMultipleLeaseCancelTransactionUntilTimestamp + 1, Long.MaxValue)
+  private val repeatedCancelAllowed   = Gen.choose(0, allowMultipleLeaseCancelTransactionUntilTimestamp - 1)
+  private val repeatedCancelForbidden = Gen.choose(allowMultipleLeaseCancelTransactionUntilTimestamp + 1, Long.MaxValue)
 
   def cancelLeaseTwice(ts: Long): Gen[(GenesisTransaction, TransferTransaction, LeaseTransaction, LeaseCancelTransaction, LeaseCancelTransaction)] =
     for {
       master   <- accountGen
       recpient <- accountGen suchThat (_ != master)
-      genesis: GenesisTransaction = GenesisTransaction.create(master, ENOUGH_AMT, ts).explicitGet()
-      (lease, unlease) <- leaseAndCancelGeneratorP(master, recpient, ts)
+      genesis: GenesisTransaction = GenesisTransaction.create(master.toAddress, ENOUGH_AMT, ts).explicitGet()
+      (lease, unlease) <- leaseAndCancelGeneratorP(master, recpient.toAddress, ts)
       fee2             <- smallFeeGen
       unlease2         <- createLeaseCancel(master, lease.id(), fee2, ts + 1)
       // ensure recipient has enough effective balance
-      payment <- wavesTransferGeneratorP(ts, master, recpient) suchThat (_.amount > lease.amount)
+      payment <- wavesTransferGeneratorP(ts, master, recpient.toAddress) suchThat (_.amount > lease.amount)
     } yield (genesis, payment, lease, unlease, unlease2)
 
-  val disallowCancelTwice = for {
+  private val disallowCancelTwice = for {
     ts                                           <- repeatedCancelForbidden
     (genesis, payment, lease, unlease, unlease2) <- cancelLeaseTwice(ts)
   } yield (Seq(TestBlock.create(ts, Seq(genesis, payment, lease, unlease))), TestBlock.create(ts, Seq(unlease2)))
@@ -85,7 +85,7 @@ class LeaseTransactionsDiffTest extends PropSpec with PropertyChecks with WithSt
     }
   }
 
-  val allowCancelTwice = for {
+  private val allowCancelTwice = for {
     ts                                           <- repeatedCancelAllowed
     (genesis, payment, lease, unlease, unlease2) <- cancelLeaseTwice(ts)
   } yield (Seq(TestBlock.create(ts, Seq(genesis, payment, lease, unlease))), TestBlock.create(ts, Seq(unlease2)))
@@ -94,7 +94,7 @@ class LeaseTransactionsDiffTest extends PropSpec with PropertyChecks with WithSt
     forAll(allowCancelTwice) {
       case (preconditions, block) =>
         assertDiffEi(preconditions, block, settings) { totalDiffEi =>
-          totalDiffEi shouldBe 'right
+          totalDiffEi.explicitGet()
         }
     }
   }
@@ -105,9 +105,9 @@ class LeaseTransactionsDiffTest extends PropSpec with PropertyChecks with WithSt
       recipient <- accountGen suchThat (_ != master)
       forward   <- accountGen suchThat (!Set(master, recipient).contains(_))
       ts        <- positiveIntGen
-      genesis: GenesisTransaction = GenesisTransaction.create(master, ENOUGH_AMT, ts).explicitGet()
-      (lease, _)        <- leaseAndCancelGeneratorP(master, recipient, ts)
-      (leaseForward, _) <- leaseAndCancelGeneratorP(recipient, forward, ts)
+      genesis: GenesisTransaction = GenesisTransaction.create(master.toAddress, ENOUGH_AMT, ts).explicitGet()
+      (lease, _)        <- leaseAndCancelGeneratorP(master, recipient.toAddress, ts)
+      (leaseForward, _) <- leaseAndCancelGeneratorP(recipient, forward.toAddress, ts)
     } yield (genesis, lease, leaseForward, ts)
 
     forAll(setup) {
@@ -128,9 +128,9 @@ class LeaseTransactionsDiffTest extends PropSpec with PropertyChecks with WithSt
       other     <- accountGen suchThat (_ != recipient)
       unleaser = if (unleaseByRecipient) recipient else other
       ts <- timestampGen
-      genesis: GenesisTransaction  = GenesisTransaction.create(master, ENOUGH_AMT, ts).explicitGet()
-      genesis2: GenesisTransaction = GenesisTransaction.create(unleaser, ENOUGH_AMT, ts).explicitGet()
-      (lease, _)              <- leaseAndCancelGeneratorP(master, recipient, ts)
+      genesis: GenesisTransaction  = GenesisTransaction.create(master.toAddress, ENOUGH_AMT, ts).explicitGet()
+      genesis2: GenesisTransaction = GenesisTransaction.create(unleaser.toAddress, ENOUGH_AMT, ts).explicitGet()
+      (lease, _)              <- leaseAndCancelGeneratorP(master, recipient.toAddress, ts)
       fee2                    <- smallFeeGen
       unleaseOtherOrRecipient <- createLeaseCancel(unleaser, lease.id(), fee2, ts + 1)
     } yield (genesis, genesis2, lease, unleaseOtherOrRecipient, ts)
@@ -152,10 +152,10 @@ class LeaseTransactionsDiffTest extends PropSpec with PropertyChecks with WithSt
     forAll(cancelLeaseOfAnotherSender(unleaseByRecipient = false, repeatedCancelAllowed)) {
       case (genesis, genesis2, lease, unleaseOther, blockTime) =>
         assertDiffAndState(Seq(TestBlock.create(Seq(genesis, genesis2, lease))), TestBlock.create(blockTime, Seq(unleaseOther)), settings) {
-          case (totalDiff, newState) =>
-            totalDiff.portfolios.get(lease.sender) shouldBe None
+          case (totalDiff, _) =>
+            totalDiff.portfolios.get(lease.sender.toAddress) shouldBe None
             total(totalDiff.portfolios(lease.recipient.asInstanceOf[Address]).lease) shouldBe -lease.amount
-            total(totalDiff.portfolios(unleaseOther.sender).lease) shouldBe lease.amount
+            total(totalDiff.portfolios(unleaseOther.sender.toAddress).lease) shouldBe lease.amount
         }
     }
   }
@@ -168,9 +168,9 @@ class LeaseTransactionsDiffTest extends PropSpec with PropertyChecks with WithSt
           TestBlock.create(blockTime, Seq(unleaseRecipient)),
           settings
         ) {
-          case (totalDiff, newState) =>
-            totalDiff.portfolios.get(lease.sender) shouldBe None
-            total(totalDiff.portfolios(unleaseRecipient.sender).lease) shouldBe 0
+          case (totalDiff, _) =>
+            totalDiff.portfolios.get(lease.sender.toAddress) shouldBe None
+            total(totalDiff.portfolios(unleaseRecipient.sender.toAddress).lease) shouldBe 0
         }
     }
   }
@@ -183,8 +183,8 @@ class LeaseTransactionsDiffTest extends PropSpec with PropertyChecks with WithSt
         fee       <- smallFeeGen
         amount    <- positiveLongGen
         ts        <- timestampGen
-        genesis = GenesisTransaction.create(master, fee + amount, ts).explicitGet()
-        lease       <- createLease(master, amount, fee, ts, recipient)
+        genesis = GenesisTransaction.create(master.toAddress, fee + amount, ts).explicitGet()
+        lease       <- createLease(master, amount, fee, ts, recipient.toAddress)
         leaseCancel <- createLeaseCancel(master, lease.id(), fee, ts + 1)
       } yield (genesis, lease, leaseCancel, ts + 2)
 
@@ -196,11 +196,11 @@ class LeaseTransactionsDiffTest extends PropSpec with PropertyChecks with WithSt
         )
 
         assertDiffEi(Seq(TestBlock.create(ts, Seq(genesis, lease))), TestBlock.create(ts + 1, Seq(leaseCancel)), beforeFailedTxs) { ei =>
-          ei shouldBe 'right
+          ei.explicitGet()
         }
 
         assertDiffEi(Seq(TestBlock.create(ts, Seq(genesis, lease))), TestBlock.create(ts + 1, Seq(leaseCancel)), afterFailedTxs) { ei =>
-          ei shouldBe 'right
+          ei.explicitGet()
         }
     }
   }

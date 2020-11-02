@@ -9,17 +9,16 @@ import com.google.common.cache._
 import com.wavesplatform.account.{Address, Alias}
 import com.wavesplatform.block.{Block, SignedBlockHeader}
 import com.wavesplatform.common.state.ByteStr
-import com.wavesplatform.lang.script.Script
 import com.wavesplatform.metrics.LevelDBStats
 import com.wavesplatform.settings.DBSettings
 import com.wavesplatform.state.DiffToStateApplier.PortfolioUpdates
 import com.wavesplatform.state._
-import com.wavesplatform.transaction.Asset.IssuedAsset
+import com.wavesplatform.transaction.Asset.{IssuedAsset, Waves}
 import com.wavesplatform.transaction.{Asset, Transaction}
 import com.wavesplatform.utils.ObservedLoadingCache
 import monix.reactive.Observer
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 import scala.concurrent.duration._
 import scala.reflect.ClassTag
 
@@ -63,7 +62,7 @@ abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) exten
   override def containsTransaction(tx: Transaction): Boolean = transactionIds.containsKey(tx.id()) || {
     if (tx.timestamp - 2.hours.toMillis <= oldestStoredBlockTimestamp) {
       LevelDBStats.miss.record(1)
-      transactionHeight(tx.id()).nonEmpty
+      transactionMeta(tx.id()).nonEmpty
     } else {
       false
     }
@@ -111,15 +110,15 @@ abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) exten
 
   override def accountScript(address: Address): Option[AccountScriptInfo] = scriptCache.get(address)
   override def hasAccountScript(address: Address): Boolean =
-    Option(scriptCache.getIfPresent(address)).map(_.nonEmpty).getOrElse(hasScriptBytes(address))
+    Option(scriptCache.getIfPresent(address)).fold(hasScriptBytes(address))(_.nonEmpty)
 
-  private val assetScriptCache: LoadingCache[IssuedAsset, Option[(Script, Long)]] =
+  private val assetScriptCache: LoadingCache[IssuedAsset, Option[AssetScriptInfo]] =
     cache(dbSettings.maxCacheSize, loadAssetScript)
-  protected def loadAssetScript(asset: IssuedAsset): Option[(Script, Long)]
+  protected def loadAssetScript(asset: IssuedAsset): Option[AssetScriptInfo]
   protected def hasAssetScriptBytes(asset: IssuedAsset): Boolean
   protected def discardAssetScript(asset: IssuedAsset): Unit = assetScriptCache.invalidate(asset)
 
-  override def assetScript(asset: IssuedAsset): Option[(Script, Long)] = assetScriptCache.get(asset)
+  override def assetScript(asset: IssuedAsset): Option[AssetScriptInfo] = assetScriptCache.get(asset)
 
   private var lastAddressId = loadMaxAddressId()
   protected def loadMaxAddressId(): Long
@@ -159,11 +158,11 @@ abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) exten
       leaseBalances: Map[AddressId, LeaseBalance],
       addressTransactions: Map[AddressId, Seq[TransactionId]],
       leaseStates: Map[ByteStr, Boolean],
-      issuedAssets: Map[IssuedAsset, (AssetStaticInfo, AssetInfo, AssetVolumeInfo)],
+      issuedAssets: Map[IssuedAsset, NewAssetInfo],
       reissuedAssets: Map[IssuedAsset, Ior[AssetInfo, AssetVolumeInfo]],
       filledQuantity: Map[ByteStr, VolumeAndFee],
       scripts: Map[AddressId, Option[AccountScriptInfo]],
-      assetScripts: Map[IssuedAsset, Option[(Script, Long)]],
+      assetScripts: Map[IssuedAsset, Option[AssetScriptInfo]],
       data: Map[Address, AccountDataInfo],
       aliases: Map[Alias, AddressId],
       sponsorship: Map[IssuedAsset, Sponsorship],
@@ -171,19 +170,22 @@ abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) exten
       reward: Option[Long],
       hitSource: ByteStr,
       scriptResults: Map[ByteStr, InvokeScriptResult],
-      failedTransactionIds: Set[ByteStr]
+      failedTransactionIds: Set[ByteStr],
+      stateHash: StateHashBuilder.Result
   ): Unit
 
   override def append(diff: Diff, carryFee: Long, totalFee: Long, reward: Option[Long], hitSource: ByteStr, block: Block): Unit = {
     val newHeight = current._1 + 1
 
+    val stateHash = new StateHashBuilder
+
     val newAddresses = Set.newBuilder[Address]
     newAddresses ++= diff.portfolios.keys.filter(addressIdCache.get(_).isEmpty)
-    for ((_, addresses, _) <- diff.transactions.values; address <- addresses if addressIdCache.get(address).isEmpty) {
+    for (NewTransactionInfo(_, addresses, _) <- diff.transactions.values; address <- addresses if addressIdCache.get(address).isEmpty) {
       newAddresses += address
     }
 
-    val failedTransactionIds: Set[ByteStr] = diff.transactions.collect { case (id, (_, _, false)) => id }.toSet
+    val failedTransactionIds: Set[ByteStr] = diff.transactions.collect { case (id, NewTransactionInfo(_, _, false)) => id }.toSet
 
     val newAddressIds = (for {
       (address, offset) <- newAddresses.result().zipWithIndex
@@ -202,14 +204,14 @@ abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) exten
     val transactionList = diff.transactions.toList
 
     transactionList.foreach {
-      case (_, (tx, _, _)) =>
+      case (_, NewTransactionInfo(tx, _, _)) =>
         transactionIds.put(tx.id(), newHeight)
     }
 
     val addressTransactions: Map[AddressId, Seq[TransactionId]] =
       transactionList
         .flatMap {
-          case (_, (tx, addrs, _)) =>
+          case (_, NewTransactionInfo(tx, addrs, _)) =>
             transactionIds.put(tx.id(), newHeight) // be careful here!
 
             addrs.map { addr =>
@@ -217,11 +219,59 @@ abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) exten
             }
         }
         .groupBy(_._1)
+        .view
         .mapValues(_.map {
           case (_, txId) => txId
         })
+        .toMap
 
     current = (newHeight, current._2 + block.blockScore(), Some(block))
+
+    for {
+      (address, assets) <- updatedBalances
+      (asset, balance)  <- assets
+    } asset match {
+      case Waves              => stateHash.addWavesBalance(address, balance)
+      case asset: IssuedAsset => stateHash.addAssetBalance(address, asset, balance)
+    }
+
+    updatedLeaseBalances foreach {
+      case (address, balance) =>
+        stateHash.addLeaseBalance(address, balance.in, balance.out)
+    }
+
+    for {
+      (address, data) <- diff.accountData
+      entry           <- data.data.values
+    } stateHash.addDataEntry(address, entry)
+
+    diff.aliases.foreach {
+      case (alias, address) =>
+        stateHash.addAlias(address, alias.name)
+    }
+
+    for {
+      (address, sv) <- diff.scripts
+      script = sv.map(_.script)
+    } stateHash.addAccountScript(address, script)
+
+    for {
+      (address, sv) <- diff.assetScripts
+      script = sv.map(_.script)
+    } stateHash.addAssetScript(address, script)
+
+    diff.leaseState.foreach {
+      case (leaseId, status) =>
+        stateHash.addLeaseStatus(TransactionId @@ leaseId, status)
+    }
+
+    diff.sponsorship.foreach {
+      case (asset, sponsorship) =>
+        stateHash.addSponsorship(asset, sponsorship match {
+          case SponsorshipValue(minFee) => minFee
+          case SponsorshipNoInfo        => 0L
+        })
+    }
 
     doAppend(
       block,
@@ -243,7 +293,8 @@ abstract class Caches(spendableBalanceChanged: Observer[(Address, Asset)]) exten
       reward,
       hitSource,
       diff.scriptResults,
-      failedTransactionIds
+      failedTransactionIds,
+      stateHash.result()
     )
 
     val emptyData = Map.empty[(Address, String), Option[DataEntry[_]]]

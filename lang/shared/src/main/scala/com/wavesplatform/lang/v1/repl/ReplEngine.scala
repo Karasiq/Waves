@@ -27,7 +27,7 @@ class ReplEngine[F[_] : Monad] {
       for {
         parsed                              <- EitherT.fromEither[F](parse(expr))
         (newCompileCtx, compiled, exprType) <- EitherT.fromEither[F](ExpressionCompiler.applyWithCtx(compileCtx, parsed))
-        evaluated                           <- EitherT(evaluator.applyWithCtx(evalCtx, compiled))
+        evaluated                           <- EitherT(evaluator.applyWithCtx(evalCtx, compiled)).leftMap(error => if (error.isEmpty) "Evaluation error" else error)
       } yield resultWithCtx(evaluated, compileCtx, newCompileCtx, exprType)
 
     r.value
@@ -36,7 +36,7 @@ class ReplEngine[F[_] : Monad] {
   private def parse(expr: String): Either[String, EXPR] =
     Parser.parseExprOrDecl(expr)
       .fold(
-        { case (_, _, err) => Left(err.traced.toString) },
+        { case _           => Left(s"Can't parse '$expr'") },
         { case (result, _) => Right(result) }
       )
 
@@ -88,12 +88,12 @@ class ReplEngine[F[_] : Monad] {
 
     val mappedFuncs =
       for {
-        (name, overloads) <- funcs
+        (name, overloads) <- funcs.toSeq.sortBy(_._1)
         signature         <- overloads
       } yield DeclPrinter.declaredFuncStr(name, signature)
 
     val mappedLets =
-      lets.map { case (name, t) => DeclPrinter.declaredLetStr(name, t) }
+      lets.toSeq.sortBy(_._1).map { case (name, t) => DeclPrinter.declaredLetStr(name, t) }
 
     val evalStr =
       resultO.fold("") { case (name, t, result) => s"$name: $t = ${result.prettyString(0)}" }

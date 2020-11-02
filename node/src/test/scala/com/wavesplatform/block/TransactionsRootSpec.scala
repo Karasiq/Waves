@@ -28,7 +28,7 @@ class TransactionsRootSpec
       sender    <- accountGen
       recipient <- accountGen
       txsLength <- Gen.choose(1, 1000)
-      txs       <- Gen.listOfN(txsLength, versionedTransferGeneratorP(sender, recipient, Waves, Waves))
+      txs       <- Gen.listOfN(txsLength, versionedTransferGeneratorP(sender, recipient.toAddress, Waves, Waves))
     } yield (signer, txs)
 
   val validProofsScenario: Gen[(List[Transaction], Int)] =
@@ -80,7 +80,6 @@ class TransactionsRootSpec
 
       val merkleProof = block.transactionProof(transaction)
 
-      merkleProof shouldBe 'defined
       block.verifyTransactionProof(merkleProof.value) shouldBe true
   }
 
@@ -94,7 +93,7 @@ class TransactionsRootSpec
   "Merkle tree for empty block should ignore any transaction" in forAll(emptyTxsDataScenario) {
     case (block, transaction) =>
       block.transactionsRootValid() shouldBe true
-      block.transactionProof(transaction) shouldBe 'empty
+      block.transactionProof(transaction) shouldBe None
       block.header.transactionsRoot.arr should contain theSameElementsAs Blake2b256.hash(Array(0.toByte))
   }
 
@@ -103,14 +102,14 @@ class TransactionsRootSpec
       (signer, txs)    <- commonGen
       anotherSender    <- accountGen
       anotherRecipient <- accountGen
-      tx               <- versionedTransferGeneratorP(anotherSender, anotherRecipient, Waves, Waves)
+      tx               <- versionedTransferGeneratorP(anotherSender, anotherRecipient.toAddress, Waves, Waves)
       block            <- versionedBlockGen(txs, signer, Block.ProtoBlockVersion)
     } yield (block, tx)
 
   "Merkle tree for block should ignore incorrect transaction" in forAll(incorrectTransactionScenario) {
     case (block, transaction) =>
       block.transactionsRootValid() shouldBe true
-      block.transactionProof(transaction) shouldBe 'empty
+      block.transactionProof(transaction) shouldBe None
   }
 
   val singleTransactionScenario: Gen[(Block, Transaction)] =
@@ -126,7 +125,6 @@ class TransactionsRootSpec
 
       val merkleProof = block.transactionProof(transaction)
 
-      merkleProof shouldBe 'defined
       block.verifyTransactionProof(merkleProof.value) shouldBe true
       merkleProof.value.digests.head shouldBe Blake2b256.hash(Array(0.toByte))
   }
@@ -141,7 +139,7 @@ class TransactionsRootSpec
   "Merkle tree for block should invalidate incorrect proof" in forAll(incorrectProofScenario) {
     case (block, transaction, proof) =>
       block.transactionsRootValid() shouldBe true
-      block.transactionProof(transaction) shouldBe 'empty
+      block.transactionProof(transaction) shouldBe None
 
       block.verifyTransactionProof(proof) shouldBe false
   }

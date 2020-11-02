@@ -1,6 +1,5 @@
 package com.wavesplatform.mining
 import com.wavesplatform.features.BlockchainFeatures
-import com.wavesplatform.features.FeatureProvider._
 import com.wavesplatform.state.{Blockchain, Diff}
 import com.wavesplatform.transaction.Transaction
 import com.wavesplatform.utils.ScorexLogging
@@ -28,7 +27,7 @@ private[mining] object ScriptRunsLegacy extends ScorexLogging {
     import com.wavesplatform.transaction.{Authorized, Transaction}
 
     val smartAccountRun = tx match {
-      case x: Transaction with Authorized if blockchain.hasAccountScript(x.sender) => 1
+      case x: Transaction with Authorized if blockchain.hasAccountScript(x.sender.toAddress) => 1
       case _                                                                => 0
     }
 

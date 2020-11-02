@@ -3,7 +3,6 @@ package com.wavesplatform.state.diffs
 import cats.data.Chain
 import cats.implicits._
 import com.wavesplatform.features.BlockchainFeatures
-import com.wavesplatform.features.FeatureProvider._
 import com.wavesplatform.lang.ValidationError
 import com.wavesplatform.settings.Constants
 import com.wavesplatform.state._
@@ -20,10 +19,10 @@ object FeeValidation {
 
   case class FeeDetails(asset: Asset, requirements: Chain[String], minFeeInAsset: Long, minFeeInWaves: Long)
 
-  val ScriptExtraFee   = 400000L
-  val FeeUnit          = 100000
-  val NFTMultiplier    = 0.001
-  val DAppV4Multiplier = 0.001
+  val ScriptExtraFee    = 400000L
+  val FeeUnit           = 100000
+  val NFTMultiplier     = 0.001
+  val BlockV5Multiplier = 0.001
 
   val FeeConstants: Map[Byte, Long] = Map(
     GenesisTransaction.typeId         -> 0,
@@ -91,7 +90,10 @@ object FeeValidation {
 
             (baseFee * multiplier).toLong
           case _: ReissueTransaction =>
-            val multiplier = if (blockchain.isFeatureActivated(BlockchainFeatures.BlockV5)) DAppV4Multiplier else 1
+            val multiplier = if (blockchain.isFeatureActivated(BlockchainFeatures.BlockV5)) BlockV5Multiplier else 1
+            (baseFee * multiplier).toLong
+          case _: SponsorFeeTransaction =>
+            val multiplier = if (blockchain.isFeatureActivated(BlockchainFeatures.BlockV5)) BlockV5Multiplier else 1
             (baseFee * multiplier).toLong
           case _ => baseFee
         }
@@ -154,7 +156,7 @@ object FeeValidation {
 
   private def feeAfterSmartAccounts(blockchain: Blockchain, tx: Transaction)(inputFee: FeeInfo): FeeInfo = {
     val smartAccountScriptsCount: Int = tx match {
-      case tx: Transaction with Authorized => if (blockchain.hasAccountScript(tx.sender)) 1 else 0
+      case tx: Transaction with Authorized => if (blockchain.hasAccountScript(tx.sender.toAddress)) 1 else 0
       case _                               => 0
     }
 

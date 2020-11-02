@@ -4,7 +4,6 @@ import com.typesafe.config.Config
 import com.wavesplatform.common.state.ByteStr
 import net.ceedubs.ficus.Ficus._
 import net.ceedubs.ficus.readers.ArbitraryTypeReader._
-import net.ceedubs.ficus.readers.EnumerationReader._
 import net.ceedubs.ficus.readers.ValueReader
 
 import scala.concurrent.duration._
@@ -63,7 +62,6 @@ case class FunctionalitySettings(
     featureCheckBlocksPeriod: Int,
     blocksForFeatureActivation: Int,
     generationBalanceDepthFrom50To1000AfterHeight: Int = 0,
-    resetEffectiveBalancesAtHeight: Int = 0,
     blockVersion3AfterHeight: Int = 0,
     preActivatedFeatures: Map[Short, Int] = Map.empty,
     doubleFeaturesPeriodsAfterHeight: Int,
@@ -72,7 +70,9 @@ case class FunctionalitySettings(
     lastTimeBasedForkParameter: Long = 0L,
     leaseExpiration: Int = 1000000,
     estimatorPreCheckHeight: Int = 0,
-    minAssetInfoUpdateInterval: Int = 100000
+    minAssetInfoUpdateInterval: Int = 100000,
+    minBlockTime: FiniteDuration = 15.seconds,
+    delayDelta: Int = 8
 ) {
   val allowLeasedBalanceTransferUntilHeight: Int        = blockVersion3AfterHeight
   val allowTemporaryNegativeUntil                       = lastTimeBasedForkParameter
@@ -112,7 +112,6 @@ object FunctionalitySettings {
     blocksForFeatureActivation = 4000,
     generationBalanceDepthFrom50To1000AfterHeight = 232000,
     lastTimeBasedForkParameter = 1530161445559L,
-    resetEffectiveBalancesAtHeight = 462000,
     blockVersion3AfterHeight = 795000,
     doubleFeaturesPeriodsAfterHeight = 810000,
     estimatorPreCheckHeight = 1847610
@@ -121,7 +120,6 @@ object FunctionalitySettings {
   val TESTNET = apply(
     featureCheckBlocksPeriod = 3000,
     blocksForFeatureActivation = 2700,
-    resetEffectiveBalancesAtHeight = 51500,
     blockVersion3AfterHeight = 161700,
     doubleFeaturesPeriodsAfterHeight = Int.MaxValue,
     lastTimeBasedForkParameter = 1492560000000L,
@@ -151,7 +149,7 @@ case class GenesisSettings(
     averageBlockDelay: FiniteDuration
 )
 
-object GenesisSettings {
+object GenesisSettings { // TODO: Move to network-defaults.conf
   val MAINNET = GenesisSettings(
     1460678400000L,
     1465742577614L,
@@ -208,11 +206,10 @@ case class BlockchainSettings(
     rewardsSettings: RewardsSettings
 )
 
-object BlockchainType extends Enumeration {
-  val STAGENET = Value("STAGENET")
-  val TESTNET  = Value("TESTNET")
-  val MAINNET  = Value("MAINNET")
-  val CUSTOM   = Value("CUSTOM")
+private[settings] object BlockchainType {
+  val STAGENET = "STAGENET"
+  val TESTNET  = "TESTNET"
+  val MAINNET  = "MAINNET"
 }
 
 object BlockchainSettings {
@@ -223,7 +220,7 @@ object BlockchainSettings {
   def fromRootConfig(config: Config): BlockchainSettings = config.as[BlockchainSettings]("waves.blockchain")
 
   private[this] def fromConfig(config: Config): BlockchainSettings = {
-    val blockchainType = config.as[BlockchainType.Value]("type")
+    val blockchainType = config.as[String]("type").toUpperCase
     val (addressSchemeCharacter, functionalitySettings, genesisSettings, rewardsSettings) = blockchainType match {
       case BlockchainType.STAGENET =>
         ('S', FunctionalitySettings.STAGENET, GenesisSettings.STAGENET, RewardsSettings.STAGENET)
@@ -231,12 +228,13 @@ object BlockchainSettings {
         ('T', FunctionalitySettings.TESTNET, GenesisSettings.TESTNET, RewardsSettings.TESTNET)
       case BlockchainType.MAINNET =>
         ('W', FunctionalitySettings.MAINNET, GenesisSettings.MAINNET, RewardsSettings.MAINNET)
-      case BlockchainType.CUSTOM =>
-        val addressSchemeCharacter = config.as[String](s"custom.address-scheme-character").charAt(0)
-        val functionalitySettings  = config.as[FunctionalitySettings](s"custom.functionality")
-        val genesisSettings        = config.as[GenesisSettings](s"custom.genesis")
-        val rewardsSettings        = config.as[RewardsSettings](s"custom.rewards")
-        (addressSchemeCharacter, functionalitySettings, genesisSettings, rewardsSettings)
+      case _ => // Custom
+        val networkId     = config.as[String](s"custom.address-scheme-character").charAt(0)
+        val functionality = config.as[FunctionalitySettings](s"custom.functionality")
+        val genesis       = config.as[GenesisSettings](s"custom.genesis")
+        val rewards       = config.as[RewardsSettings](s"custom.rewards")
+        require(functionality.minBlockTime <= genesis.averageBlockDelay, "minBlockTime should be <= averageBlockDelay")
+        (networkId, functionality, genesis, rewards)
     }
 
     BlockchainSettings(

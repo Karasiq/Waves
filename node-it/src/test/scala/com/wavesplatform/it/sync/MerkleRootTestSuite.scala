@@ -28,7 +28,7 @@ class MerkleRootTestSuite
 
   "not able to get merkle proof before activation" in {
     nodes.head.waitForHeight(ActivationHeight - 1)
-    val txId = nodes.head.broadcastTransfer(nodes.head.privateKey, nodes.head.address, transferAmount, minFee, None, None).id
+    val txId = nodes.head.broadcastTransfer(nodes.head.keyPair, nodes.head.address, transferAmount, minFee, None, None).id
     assertApiError(
       nodes.head.getMerkleProof(txId),
       CustomValidationError(s"transactions do not exist or block version < ${Block.ProtoBlockVersion}")
@@ -40,9 +40,9 @@ class MerkleRootTestSuite
   }
   "able to get merkle proof after activation" in {
     nodes.head.waitForHeight(ActivationHeight, 2.minutes)
-    val txId1 = nodes.head.broadcastTransfer(nodes.head.privateKey, nodes.head.address, transferAmount, minFee, None, None, waitForTx = true).id
-    val txId2 = nodes.head.broadcastTransfer(nodes.head.privateKey, nodes.head.address, transferAmount, minFee, None, None, waitForTx = true).id
-    val txId3 = nodes.head.broadcastTransfer(nodes.head.privateKey, nodes.head.address, transferAmount, minFee, None, None, waitForTx = true).id
+    val txId1 = nodes.head.broadcastTransfer(nodes.head.keyPair, nodes.head.address, transferAmount, minFee, None, None, waitForTx = true).id
+    val txId2 = nodes.head.broadcastTransfer(nodes.head.keyPair, nodes.head.address, transferAmount, minFee, None, None, waitForTx = true).id
+    val txId3 = nodes.head.broadcastTransfer(nodes.head.keyPair, nodes.head.address, transferAmount, minFee, None, None, waitForTx = true).id
     nodes.head.getMerkleProof(txId1, txId2, txId3).map(resp => resp.id) should contain theSameElementsAs Seq(txId1, txId2, txId3)
     nodes.head.getMerkleProofPost(txId1, txId2, txId3).map(resp => resp.id) should contain theSameElementsAs Seq(txId1, txId2, txId3)
     nodes.head.getMerkleProof(txId1, txId2, txId3).map(resp => resp.transactionIndex) should contain theSameElementsAs Seq(0, 1, 2)
@@ -73,8 +73,8 @@ class MerkleRootTestSuite
     )
   }
   "merkle proof api returns only existent txs when existent and inexistent ids passed" in {
-    val txId1 = nodes.head.broadcastTransfer(nodes.head.privateKey, nodes.head.address, transferAmount, minFee, None, None, waitForTx = true).id
-    val txId2 = nodes.head.broadcastTransfer(nodes.head.privateKey, nodes.head.address, transferAmount, minFee, None, None, waitForTx = true).id
+    val txId1 = nodes.head.broadcastTransfer(nodes.head.keyPair, nodes.head.address, transferAmount, minFee, None, None, waitForTx = true).id
+    val txId2 = nodes.head.broadcastTransfer(nodes.head.keyPair, nodes.head.address, transferAmount, minFee, None, None, waitForTx = true).id
     val inexistentTx = "FCym43ddiKKT3d4kznawWasoMbWd1LWyX8DUrwAAbcUA"
     nodes.head.getMerkleProof(txId1, txId2, inexistentTx).map(resp => resp.id) should contain theSameElementsAs Seq(txId1, txId2)
     nodes.head.getMerkleProofPost(txId1, txId2, inexistentTx).map(resp => resp.id) should contain theSameElementsAs Seq(txId1, txId2)
@@ -86,20 +86,22 @@ class MerkleRootTestSuite
     */
     nodes.waitForHeightArise()
     val currentHeight               = nodes.head.height
-    val txsSeq                      = collection.mutable.ListBuffer[String]()
-    var merkleProofBefore           = Vector(Vector(""))
-    var merkleProofPostBefore       = Vector(Vector(""))
+    val txsBuf                      = collection.mutable.ListBuffer[String]()
+    var merkleProofBefore           = Seq(Seq(""))
+    var merkleProofPostBefore       = Seq(Seq(""))
     var blockTransactionsRootBefore = ""
     while (nodes.head.height == currentHeight) {
-      val tx = nodes.head.broadcastTransfer(nodes.head.privateKey, nodes.head.address, transferAmount, minFee, None, None, waitForTx = true).id
+      val tx = nodes.head.broadcastTransfer(nodes.head.keyPair, nodes.head.address, transferAmount, minFee, None, None, waitForTx = true).id
       if (nodes.head.height == currentHeight) {
-        txsSeq += tx
-        merkleProofBefore = nodes.head.getMerkleProof(txsSeq: _*).map(resp => resp.merkleProof).asInstanceOf[Vector[Vector[String]]]
-        merkleProofPostBefore = nodes.head.getMerkleProofPost(txsSeq: _*).map(resp => resp.merkleProof).asInstanceOf[Vector[Vector[String]]]
+        txsBuf += tx
+        val txsSeq = txsBuf.toSeq
+        merkleProofBefore = nodes.head.getMerkleProof(txsSeq: _*).map(resp => resp.merkleProof)
+        merkleProofPostBefore = nodes.head.getMerkleProofPost(txsSeq: _*).map(resp => resp.merkleProof)
         blockTransactionsRootBefore = nodes.head.blockAt(currentHeight).transactionsRoot.get
       }
     }
     nodes.head.height shouldBe currentHeight + 1
+    val txsSeq = txsBuf.toSeq
     nodes.head.getMerkleProof(txsSeq: _*).map(resp => resp.merkleProof) should not be merkleProofBefore
     nodes.head.getMerkleProofPost(txsSeq: _*).map(resp => resp.merkleProof) should not be merkleProofPostBefore
     nodes.head.blockAt(currentHeight).transactionsRoot.get should not be blockTransactionsRootBefore

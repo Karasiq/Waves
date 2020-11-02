@@ -16,7 +16,7 @@ import com.wavesplatform.transaction.lease.{LeaseCancelTransaction, LeaseTransac
 import com.wavesplatform.transaction.smart.InvokeScriptTransaction.Payment
 import com.wavesplatform.transaction.smart.{InvokeScriptTransaction, SetScriptTransaction}
 import com.wavesplatform.transaction.transfer.MassTransferTransaction.ParsedTransfer
-import com.wavesplatform.transaction.transfer.{Attachment, MassTransferTransaction, TransferTransaction}
+import com.wavesplatform.transaction.transfer.{MassTransferTransaction, TransferTransaction}
 import com.wavesplatform.utils.StringBytes
 import org.scalacheck.Gen
 import org.scalatest.{FreeSpec, Matchers}
@@ -53,7 +53,7 @@ class ProtoVersionTransactionsSpec extends FreeSpec with TransactionGen with Mat
 
       val issueTx = IssueTransaction(
         TxVersion.V3,
-        Account,
+        Account.publicKey,
         name.toByteString,
         description.toByteString,
         quantity,
@@ -64,7 +64,7 @@ class ProtoVersionTransactionsSpec extends FreeSpec with TransactionGen with Mat
         Now,
         Proofs.empty,
         AddressScheme.current.chainId
-      ).signWith(Account)
+      ).signWith(Account.privateKey)
       val base64IssueStr = Base64.encode(PBUtils.encodeDeterministic(PBTransactions.protobuf(issueTx)))
 
       val reissueTx = ReissueTransaction
@@ -94,11 +94,13 @@ class ProtoVersionTransactionsSpec extends FreeSpec with TransactionGen with Mat
       val seller    = accountGen.sample.get
       val assetPair = assetPairGen.sample.get
 
-      val buyOrder  = Order.buy(Order.V3, buyer, Account, assetPair, Order.MaxAmount / 2, 100, Now, Now + Order.MaxLiveTime, MinFee * 3)
-      val sellOrder = Order.sell(Order.V3, seller, Account, assetPair, Order.MaxAmount / 2, 100, Now, Now + Order.MaxLiveTime, MinFee * 3)
+      val buyOrder  = Order.buy(Order.V3, buyer, Account.publicKey, assetPair, Order.MaxAmount / 2, 100, Now, Now + Order.MaxLiveTime, MinFee * 3)
+      val sellOrder = Order.sell(Order.V3, seller, Account.publicKey, assetPair, Order.MaxAmount / 2, 100, Now, Now + Order.MaxLiveTime, MinFee * 3)
 
       val exchangeTx =
-        ExchangeTransaction.signed(TxVersion.V3, Account, buyOrder, sellOrder, 100, 100, MinFee * 3, MinFee * 3, MinFee * 3, Now).explicitGet()
+        ExchangeTransaction
+          .signed(TxVersion.V3, Account.privateKey, buyOrder, sellOrder, 100, 100, MinFee * 3, MinFee * 3, MinFee * 3, Now)
+          .explicitGet()
       val base64Str = Base64.encode(PBUtils.encodeDeterministic(PBTransactions.protobuf(exchangeTx)))
 
       decode(base64Str) shouldBe exchangeTx
@@ -130,7 +132,8 @@ class ProtoVersionTransactionsSpec extends FreeSpec with TransactionGen with Mat
 
       val leaseTx = LeaseTransaction.selfSigned(TxVersion.V3, Account, recipient, 100, MinFee, Now).explicitGet()
       val leaseCancelTx =
-        LeaseCancelTransaction(TxVersion.V3, Account, leaseTx.id(), MinFee, Now, Proofs.empty, AddressScheme.current.chainId).signWith(Account)
+        LeaseCancelTransaction(TxVersion.V3, Account.publicKey, leaseTx.id(), MinFee, Now, Proofs.empty, AddressScheme.current.chainId)
+          .signWith(Account.privateKey)
       val base64LeaseStr       = Base64.encode(PBUtils.encodeDeterministic(PBTransactions.protobuf(leaseTx)))
       val base64CancelLeaseStr = Base64.encode(PBUtils.encodeDeterministic(PBTransactions.protobuf(leaseCancelTx)))
 
@@ -145,7 +148,7 @@ class ProtoVersionTransactionsSpec extends FreeSpec with TransactionGen with Mat
 
       val transferTx =
         TransferTransaction
-          .selfSigned(TxVersion.V3, Account, recipient, asset, 100, Asset.Waves, MinFee, Some(Attachment.Bin(attachment)), Now)
+          .selfSigned(TxVersion.V3, Account, recipient, asset, 100, Asset.Waves, MinFee, ByteStr(attachment), Now)
           .explicitGet()
 
       val base64Str = Base64.encode(PBUtils.encodeDeterministic(PBTransactions.protobuf(transferTx)))
@@ -159,7 +162,7 @@ class ProtoVersionTransactionsSpec extends FreeSpec with TransactionGen with Mat
 
       val massTransferTx =
         MassTransferTransaction
-          .selfSigned(TxVersion.V2, Account, Asset.Waves, transfers, MassTransferTxFee, Now, Some(Attachment.Bin(attachment)))
+          .selfSigned(TxVersion.V2, Account, Asset.Waves, transfers, MassTransferTxFee, Now, ByteStr(attachment))
           .explicitGet()
       val base64Str = Base64.encode(PBUtils.encodeDeterministic(PBTransactions.protobuf(massTransferTx)))
 
