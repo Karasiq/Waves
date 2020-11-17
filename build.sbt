@@ -13,7 +13,13 @@ import sbtcrossproject.CrossPlugin.autoImport.{CrossType, crossProject}
 val langPublishSettings = Seq(
   coverageExcludedPackages := "",
   publishMavenStyle := true,
-  publishTo := Some("Sonatype Nexus" at "https://oss.sonatype.org/service/local/staging/deploy/maven2"),
+  publishTo := {
+    val nexus = "https://oss.sonatype.org/"
+    if (isSnapshot.value)
+      Some("snapshots" at nexus + "content/repositories/snapshots")
+    else
+      Some("releases" at nexus + "service/local/staging/deploy/maven2")
+  },
   homepage := Some(url("https://docs.wavesplatform.com/en/technical-details/waves-contracts-language-description/maven-compiler-package.html")),
   developers := List(
     Developer("petermz", "Peter Zhelezniakov", "peterz@rambler.ru", url("https://wavesplatform.com"))
@@ -35,7 +41,7 @@ lazy val lang =
           PB.protoSources := Seq(PB.externalIncludePath.value, baseDirectory.value.getParentFile / "shared" / "src" / "main" / "protobuf"),
           includeFilter in PB.generate := { (f: File) =>
             (** / "DAppMeta.proto").matches(f.toPath) ||
-              (** / "waves" / "*.proto").matches(f.toPath)
+            (** / "waves" / "*.proto").matches(f.toPath)
           },
           PB.deleteTargetDirectory := false
         )
@@ -48,13 +54,21 @@ lazy val `lang-jvm` = lang.jvm
     name := "RIDE Compiler",
     normalizedName := "lang",
     description := "The RIDE smart contract language compiler",
-    libraryDependencies += "org.scala-js" %% "scalajs-stubs" % "1.0.0" % Provided
+    coverageExcludedPackages := "",
+    libraryDependencies ++=
+      Seq(
+        "org.scala-js"                      %% "scalajs-stubs" % "1.0.0" % Provided,
+        "com.github.spullara.mustache.java" % "compiler"       % "0.9.5"
+      )
   )
 
 lazy val `lang-js` = lang.js
   .enablePlugins(VersionObject)
   .settings(
-    libraryDependencies += Dependencies.circeJsInterop.value
+    libraryDependencies += Dependencies.circeJsInterop.value,
+    scalaJSLinkerConfig ~= {
+      _.withModuleKind(ModuleKind.CommonJSModule)
+    }
   )
 
 lazy val `lang-testkit` = project
@@ -96,7 +110,7 @@ lazy val root = (project in file("."))
 inScope(Global)(
   Seq(
     scalaVersion := "2.13.3",
-    organization := "com.wavesplatform",
+    organization := "com.github.karasiq",
     organizationName := "Waves Platform",
     V.fallback := (1, 2, 14),
     organizationHomepage := Some(url("https://wavesplatform.com")),
