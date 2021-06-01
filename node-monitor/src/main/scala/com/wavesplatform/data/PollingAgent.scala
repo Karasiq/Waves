@@ -1,11 +1,11 @@
 package com.wavesplatform.data
 
+import scala.util.Try
+
 import com.wavesplatform.events.api.grpc.protobuf.{BlockchainUpdatesApiGrpc, SubscribeEvent, SubscribeRequest}
 import com.wavesplatform.events.protobuf.BlockchainUpdated
 import com.wavesplatform.utils.ScorexLogging
 import io.grpc.ManagedChannelBuilder
-
-import scala.util.Try
 
 class PollingAgent(height: Int) extends ScorexLogging {
   def start(f: Iterator[BlockchainUpdated] => Unit): Unit = {

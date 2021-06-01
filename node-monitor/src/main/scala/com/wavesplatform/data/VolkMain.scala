@@ -2,22 +2,22 @@ package com.wavesplatform.data
 
 import java.time._
 
+import scala.concurrent.duration.{Duration => _, _}
+import scala.util.Try
+import scala.util.control.NonFatal
+
 import com.wavesplatform.account.{Address, AddressScheme}
 import com.wavesplatform.common.state.ByteStr
 import com.wavesplatform.events.protobuf.{BlockchainUpdated, StateUpdate}
 import com.wavesplatform.protobuf.block.PBBlocks
 import com.wavesplatform.protobuf.transaction.{PBSignedTransaction, PBTransactions, VanillaTransaction}
+import com.wavesplatform.transaction.{AuthorizedTransaction, Transaction}
 import com.wavesplatform.transaction.Asset.Waves
 import com.wavesplatform.transaction.lease.{LeaseCancelTransaction, LeaseTransaction}
 import com.wavesplatform.transaction.transfer.TransferTransaction
-import com.wavesplatform.transaction.{AuthorizedTransaction, Transaction}
 import com.wavesplatform.utils.ScorexLogging
 import okhttp3.{OkHttpClient, Request}
 import play.api.libs.json.Json
-
-import scala.concurrent.duration.{Duration => _, _}
-import scala.util.Try
-import scala.util.control.NonFatal
 
 object VolkMain extends App with ScorexLogging {
   def parseTransaction(tx: PBSignedTransaction): Option[VanillaTransaction] = Try(PBTransactions.vanillaUnsafe(tx)).toOption
@@ -110,15 +110,17 @@ object VolkMain extends App with ScorexLogging {
     case BlockchainUpdated(
         id,
         height,
+        _,
         BlockchainUpdated.Update
-          .Append(BlockchainUpdated.Append(_, Some(stateUpdate), txUpdates, BlockchainUpdated.Append.Body.MicroBlock(microBlock)))
+          .Append(BlockchainUpdated.Append(_, _, Some(stateUpdate), txUpdates, BlockchainUpdated.Append.Body.MicroBlock(microBlock)))
         ) if height > startHeight =>
       aggr.addMicroBlock(height, id, stateUpdate, txUpdates.toVector, microBlock.getMicroBlock.getMicroBlock.transactions)
 
     case BlockchainUpdated(
         id,
         nextHeight,
-        BlockchainUpdated.Update.Append(BlockchainUpdated.Append(_, stateUpdateOpt, txUpdates, BlockchainUpdated.Append.Body.Block(block)))
+        _,
+        BlockchainUpdated.Update.Append(BlockchainUpdated.Append(_, _, stateUpdateOpt, txUpdates, BlockchainUpdated.Append.Body.Block(block)))
         ) if nextHeight > db.lastHeight && nextHeight > startHeight =>
       // if (nextHeight != aggr.height + 1) log.warn(s"Height skip: ${db.lastHeight} -> $nextHeight")
       rollbacksEnabled = true // Arrived to the correct offset
@@ -172,7 +174,7 @@ object VolkMain extends App with ScorexLogging {
       if (newLeases.nonEmpty || cancelled.nonEmpty) db.addLeases(newLeases, cancelled)
 
       val isNodeGenerated = PBBlocks.vanilla(block.getBlock.getHeader).generator.toAddress == nodeAddress
-      // log.info(s"New block: $height, generated $isNodeGenerated")
+      if (height % 10000 == 0) log.info(s"New block: $height")
       val rewards = db.saveBalances(height, updates, transactions.flatMap(parseTransaction))
 
       val currentBlockTime = block.getBlock.getHeader.timestamp
@@ -203,7 +205,7 @@ object VolkMain extends App with ScorexLogging {
       if (rewards != 0 && isToday) Stats.update(rewards)
       Stats.publish(channels)
 
-    case e @ BlockchainUpdated(_, height, BlockchainUpdated.Update.Rollback(rollback))
+    case e @ BlockchainUpdated(_, height, _, BlockchainUpdated.Update.Rollback(rollback))
         if rollback.`type`.isBlock && db.lastHeight >= height && rollbacksEnabled =>
       if (height < db.lastHeight - 100) log.warn(s"Rollback to $height: $e")
       if (height < db.lastHeight - 10000) {
@@ -213,7 +215,7 @@ object VolkMain extends App with ScorexLogging {
       db.rollback(height)
       aggr.rollback(height, aggr.keyBlockId)
 
-    case BlockchainUpdated(id, height, BlockchainUpdated.Update.Rollback(rollback)) if rollback.`type`.isMicroblock && height > startHeight =>
+    case BlockchainUpdated(id, height, _, BlockchainUpdated.Update.Rollback(rollback)) if rollback.`type`.isMicroblock && height > startHeight =>
       // log.info(s"Rollback to ${ByteStr(id.toByteArray)}")
       aggr.rollback(height, id)
 

@@ -1,5 +1,7 @@
 package com.wavesplatform.data
 
+import scala.util.Try
+
 import com.google.protobuf.ByteString
 import com.wavesplatform.account.{Address, AddressScheme}
 import com.wavesplatform.common.state.ByteStr
@@ -12,8 +14,6 @@ import com.wavesplatform.transaction.Transaction
 import com.wavesplatform.transaction.lease.{LeaseCancelTransaction, LeaseTransaction}
 import com.wavesplatform.transaction.transfer.TransferTransaction
 import com.wavesplatform.utils.ScorexLogging
-
-import scala.util.Try
 
 class BalancesDB(nodeAddress: Address, safeAddress: Address) extends ScorexLogging {
   val db = openDB(sys.env.getOrElse("VOLK_DB", "volk_balances"))
@@ -33,7 +33,7 @@ class BalancesDB(nodeAddress: Address, safeAddress: Address) extends ScorexLoggi
     def toAddress(address: ByteString): Address =
       PBRecipients.toAddress(address.toByteArray, AddressScheme.current.chainId).right.get
 
-    def isNodeWaves(upd: BalanceUpdate) = toAddress(upd.address) == nodeAddress && upd.getAmount.assetId.isEmpty
+    def isNodeWaves(upd: BalanceUpdate) = toAddress(upd.address) == nodeAddress && upd.getAmountAfter.assetId.isEmpty
     val relevant = stateUpdates.flatMap(ss => ss._1 +: ss._2).flatMap(_.balances).exists(isNodeWaves)
 
     if (relevant) db.readWrite { rw =>
@@ -43,13 +43,13 @@ class BalancesDB(nodeAddress: Address, safeAddress: Address) extends ScorexLoggi
         case ((current, reward), (blockUpd, txUpdates)) =>
           val rewardDiff = blockUpd.balances
             .filter(isNodeWaves)
-            .foldLeft((current, 0L)) { case ((value, diff), bu) => (bu.getAmount.amount, diff + (bu.getAmount.amount - value)) }._2
+            .foldLeft((current, 0L)) { case ((value, diff), bu) => (bu.getAmountAfter.amount, diff + (bu.getAmountAfter.amount - value)) }._2
 
           val newBalance = (blockUpd +: txUpdates)
             .flatMap(_.balances)
             .filter(isNodeWaves)
             .lastOption
-            .map(_.getAmount.amount)
+            .map(_.getAmountAfter.amount)
             .getOrElse(current)
           (newBalance, reward + rewardDiff)
       }

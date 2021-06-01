@@ -95,6 +95,9 @@ lazy val root = (project in file("."))
     benchmark
   )
 
+lazy val `node-monitor` = project
+  .dependsOn(node % "compile;test->test;runtime->provided", `grpc-server`)
+
 inScope(Global)(
   Seq(
     scalaVersion := "2.13.3",
